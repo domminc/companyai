@@ -8,6 +8,8 @@ AI 에이전트를 **직원으로 고용**하고, **업무를 지시**하고, **
 
 회의는 [DeskRPG](https://github.com/dandacompany/deskrpg)의 회의 방식을 참고한 **발언권 시스템**으로 진행되고, 끝나면 서기가 회의록을 쓰고 액션 아이템을 담당자에게 업무로 배정합니다.
 
+첫 화면은 **3D 오피스**입니다. 엔진 상태에 따라 직원들이 실제로 움직입니다: 일하는 직원은 책상에서 타이핑하고(모니터가 켜짐), 회의가 시작되면 회의실로 걸어가 앉고, 발언자는 말풍선으로 말하고, 손을 든 사람은 팔을 듭니다. 업무를 끝내면 대표 자리로 걸어와 완료 보고를 하고, 한가한 직원은 가끔 라운지로 쉬러 갑니다. 새로 채용한 직원은 입구로 들어오고, 내보낸 직원은 입구로 나갑니다.
+
 ```
 채용(공고 → AI 후보 추천 → 확정, Claude 또는 Hermes 프로필)  →  업무 지시  →  직원이 스트리밍으로 결과물 작성
           ↘  회의 소집  →  진행자 개회 → 손들기(SPEAK/PASS) → 발언 … → 회의록 · 액션 아이템  →  자동 업무 배정
@@ -32,6 +34,13 @@ Hermes 직원을 써 보려면 상단 **Hermes 연결**에서 게이트웨이(�
 npm run fake-hermes       # http://127.0.0.1:8642, API 키 dev-key, 프로필 default·researcher·coder
 ```
 
+데모 모드는 응답이 너무 빨라서 걸어가는 모습을 보기 전에 회의가 끝납니다. 천천히 보고 싶으면 지연을 늘리세요.
+
+```bash
+COMPANYAI_MOCK_DELAY_MS=200 npm run dev   # mock 응답 단어당 지연(ms)
+FAKE_HERMES_DELAY_MS=200 npm run fake-hermes
+```
+
 배포/단일 프로세스 실행:
 
 ```bash
@@ -42,6 +51,7 @@ npm run build && npm start   # http://localhost:8787 에서 UI와 API를 함께 
 
 | 화면 | 할 수 있는 일 |
 |---|---|
+| **오피스 (3D)** | 사무실 전체를 보며 회전·이동·확대. 직원을 클릭하면 상태·지금 하는 일을 보고 바로 업무를 지시. **회의실**·**발언자 따라가기** 카메라. 회의 테이블을 클릭하면 회의 화면으로 |
 | **직원** | 채용 공고를 쓰면 AI가 후보(이름·직무·페르소나·강점)를 추천 → 수정 후 채용. 직접 입력 채용, 페르소나/모델 수정, 내보내기 |
 | **업무** | 칸반(할 일/진행 중/완료/실패). 업무를 지시하면 담당자가 한가할 때 자동으로 시작하고, 결과물이 실시간으로 스트리밍됩니다. 재배정·다시 시키기·삭제 |
 | **회의** | 주제·안건·참석자(첫 번째가 진행자)·1인당 발언 횟수를 정해 소집. 누가 손을 들었고 누가 PASS했는지, 지금 누가 발언 중인지 실시간으로 보입니다. 대표(사용자)도 발언하고 `@이름`으로 지명하거나 발언권을 주고, 회의를 끝낼 수 있습니다. 끝나면 회의록·결정사항·액션 아이템이 정리되고 업무로 배정됩니다 |
@@ -92,6 +102,13 @@ engine/            # UI와 무관한 순수 엔진 (다른 앱에서도 import �
   testing/         # 가짜 Hermes 게이트웨이, 스크립트 LLM
 server/index.ts    # REST API + SSE(/api/events) + 빌드된 UI 서빙
 web/               # React + Vite UI
+  src/office/      # 3D 오피스 (three.js)
+    layout.ts      #   평면도: 책상·회의실·대표석·라운지 배치 (인원에 따라 커짐)
+    pathfinding.ts #   A* 길찾기 (가구·유리벽을 돌아 문으로)
+    plan.ts        #   엔진 상태 → 직원별 목적지·말풍선·동작 (순수 함수, 테스트 있음)
+    character.ts   #   코드로 만든 로우폴리 캐릭터와 걷기·앉기·타이핑·발언·손들기 동작
+    furniture.ts   #   방·가구
+    scene.ts       #   렌더링 루프, 카메라, 클릭, 보고/휴식 이벤트
 ```
 
 ### 엔진을 코드에서 직접 쓰기
@@ -156,5 +173,5 @@ npm run typecheck
 
 ## 참고
 
-- [DeskRPG](https://github.com/dandacompany/deskrpg) · [DeskRPG Hermes 플러그인](https://github.com/dandacompany/deskrpg-hermes-plugin) — 회의 발언권(손들기·공정성·발언 한도·지명), Hermes 연동 방식
+- [DeskRPG](https://github.com/dandacompany/deskrpg) · [DeskRPG Hermes 플러그인](https://github.com/dandacompany/deskrpg-hermes-plugin) — 3D 가상 오피스 컨셉, 회의 발언권(손들기·공정성·발언 한도·지명), Hermes 연동 방식. DeskRPG는 Sustainable Use License라서 코드·에셋은 가져오지 않았고, 3D 오피스와 캐릭터는 모두 이 저장소에서 새로 만들었습니다.
 - [Hermes Agent](https://github.com/NousResearch/hermes-agent) — API Server / Runs API

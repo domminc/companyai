@@ -17,10 +17,11 @@ const STATIC_DIR = resolve("dist");
 
 function chooseLLM(): LLM {
   const choice = process.env.COMPANYAI_PROVIDER;
-  if (choice === "mock") return new MockLLM();
+  const mockDelay = Number(process.env.COMPANYAI_MOCK_DELAY_MS ?? 25);
+  if (choice === "mock") return new MockLLM(mockDelay);
   if (choice === "anthropic") return new AnthropicLLM();
   const hasCredentials = !!(process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN);
-  return hasCredentials ? new AnthropicLLM() : new MockLLM();
+  return hasCredentials ? new AnthropicLLM() : new MockLLM(mockDelay);
 }
 
 const company = await Company.open({ llm: chooseLLM(), store: new JsonFileStore(DATA_FILE) });

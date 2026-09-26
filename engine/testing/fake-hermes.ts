@@ -166,7 +166,7 @@ export async function startFakeHermes(opts: FakeHermesOptions = {}, port = 0): P
 if (import.meta.url === `file://${process.argv[1]}`) {
   const port = Number(process.env.FAKE_HERMES_PORT ?? 8642);
   const fake = await startFakeHermes(
-    { apiKey: "dev-key", profiles: { researcher: undefined, coder: undefined }, chunkDelayMs: 30 },
+    { apiKey: "dev-key", profiles: { researcher: undefined, coder: undefined }, chunkDelayMs: Number(process.env.FAKE_HERMES_DELAY_MS ?? 30) },
     port,
   );
   console.log(`Fake Hermes gateway on ${fake.url}  (API key: dev-key, profiles: default, researcher, coder)`);

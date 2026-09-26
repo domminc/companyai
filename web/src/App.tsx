@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { api, type CompanyState, type ModelOption } from "./api";
 import { timeAgo } from "./components/common";
 import { GatewaysDialog } from "./components/GatewaysDialog";
@@ -7,9 +7,13 @@ import { TasksView } from "./components/TasksView";
 import { TeamView } from "./components/TeamView";
 import { useCompany } from "./store";
 
-type Tab = "team" | "tasks" | "meetings";
+// three.js is large; load the 3D office only when its tab opens.
+const OfficeView = lazy(() => import("./components/OfficeView").then((m) => ({ default: m.OfficeView })));
+
+type Tab = "office" | "team" | "tasks" | "meetings";
 
 const TABS: { id: Tab; label: string }[] = [
+  { id: "office", label: "오피스" },
   { id: "team", label: "직원" },
   { id: "tasks", label: "업무" },
   { id: "meetings", label: "회의" },
@@ -17,7 +21,10 @@ const TABS: { id: Tab; label: string }[] = [
 
 export function App() {
   const { state, provider, models, connected } = useCompany();
-  const [tab, setTab] = useState<Tab>(() => (location.hash.slice(1) as Tab) || "team");
+  const [tab, setTab] = useState<Tab>(() => {
+    const fromHash = location.hash.slice(1) as Tab;
+    return TABS.some((t) => t.id === fromHash) ? fromHash : "office";
+  });
 
   useEffect(() => {
     history.replaceState(null, "", `#${tab}`);
@@ -27,7 +34,8 @@ export function App() {
     return <div className="loading">{connected ? "불러오는 중…" : "엔진에 연결하는 중… (npm run dev 로 서버를 켜 주세요)"}</div>;
   }
 
-  const counts = {
+  const counts: Record<Tab, number> = {
+    office: 0,
     team: state.agents.length,
     tasks: state.tasks.filter((t) => t.status === "todo" || t.status === "in_progress").length,
     meetings: state.meetings.filter((m) => m.status === "scheduled" || m.status === "running").length,
@@ -46,6 +54,11 @@ export function App() {
       </nav>
       <div className="layout">
         <main>
+          {tab === "office" && (
+            <Suspense fallback={<div className="office-stage loading">3D 오피스를 불러오는 중…</div>}>
+              <OfficeView state={state} models={models} onNavigate={setTab} />
+            </Suspense>
+          )}
           {tab === "team" && <TeamView state={state} models={models} />}
           {tab === "tasks" && <TasksView state={state} />}
           {tab === "meetings" && <MeetingsView state={state} />}
