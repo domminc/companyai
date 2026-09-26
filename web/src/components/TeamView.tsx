@@ -18,7 +18,7 @@ export function TeamView({ state, models }: { state: CompanyState; models: Model
           <h2>직원</h2>
           <p className="muted">{state.agents.length}명 재직 중</p>
         </div>
-        <button className="btn primary" onClick={() => setHiring(true)}>
+        <button className="btn primary needs-edit" onClick={() => setHiring(true)}>
           + 채용하기
         </button>
       </div>

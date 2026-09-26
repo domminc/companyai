@@ -1,5 +1,6 @@
-import { lazy, Suspense, useEffect, useState } from "react";
-import { api, type CompanyState, type ModelOption } from "./api";
+import { lazy, type ReactNode, Suspense, useEffect, useState } from "react";
+import { type AuthInfo, api, type CompanyState, type ModelOption, type OnlineUser } from "./api";
+import { AccountArea, LoginScreen, useAuth } from "./components/Accounts";
 import { timeAgo } from "./components/common";
 import { GatewaysDialog } from "./components/GatewaysDialog";
 import { HermesKanbanView } from "./components/HermesKanbanView";
@@ -22,7 +23,27 @@ const TABS: { id: Tab; label: string }[] = [
 ];
 
 export function App() {
-  const { state, provider, models, connected } = useCompany();
+  const auth = useAuth();
+  if (!auth.info) {
+    return <div className="loading">{auth.error ? "엔진에 연결하는 중… (npm run dev 로 서버를 켜 주세요)" : "불러오는 중…"}</div>;
+  }
+  if (auth.info.enabled && !auth.info.user) return <LoginScreen onLogin={auth.setInfo} />;
+  // A new session (login turned on, someone else signed in) needs a fresh event stream.
+  return <Company key={`${auth.info.enabled}:${auth.info.user?.id ?? ""}`} auth={auth.info} onAuth={auth.setInfo} />;
+}
+
+/** 대표's name tag and the teammates who walk around the 3D office. */
+function officePeople(auth: AuthInfo, online: OnlineUser[]) {
+  const me = auth.user;
+  if (!auth.enabled || !me) return { boss: "대표 (나)", visitors: [] };
+  return {
+    boss: me.role === "owner" ? `${me.displayName} (나)` : "대표",
+    visitors: online.filter((u) => u.role !== "owner").map((u) => ({ id: u.id, name: u.id === me.id ? `${u.displayName} (나)` : u.displayName })),
+  };
+}
+
+function Company({ auth, onAuth }: { auth: AuthInfo; onAuth: (info: AuthInfo) => void }) {
+  const { state, provider, models, connected, online } = useCompany();
   const [tab, setTab] = useState<Tab>(() => {
     const fromHash = location.hash.slice(1) as Tab;
     return TABS.some((t) => t.id === fromHash) ? fromHash : "office";
@@ -38,6 +59,10 @@ export function App() {
     return <div className="loading">{connected ? "불러오는 중…" : "엔진에 연결하는 중… (npm run dev 로 서버를 켜 주세요)"}</div>;
   }
 
+  const readOnly = auth.user?.role === "viewer";
+  const canAdmin = !auth.enabled || auth.user?.role === "owner";
+  const people = officePeople(auth, online);
+
   const counts: Record<Tab, number> = {
     office: 0,
     team: state.agents.length,
@@ -47,8 +72,11 @@ export function App() {
   };
 
   return (
-    <div className="app">
-      <CompanyHeader state={state} provider={provider} models={models} connected={connected} />
+    <div className={`app ${readOnly ? "readonly" : ""}`}>
+      <CompanyHeader state={state} provider={provider} models={models} connected={connected} canAdmin={canAdmin}>
+        <AccountArea auth={auth} online={online} onAuth={onAuth} />
+      </CompanyHeader>
+      {readOnly && <div className="readonly-banner">보기 전용 계정입니다. 오피스를 둘러볼 수 있지만 바꿀 수는 없습니다.</div>}
       <nav className="tabs">
         {TABS.filter((t) => t.id !== "hermes" || state.gateways.length > 0).map((t) => (
           <button key={t.id} className={tab === t.id ? "active" : ""} onClick={() => setTab(t.id)}>
@@ -63,7 +91,7 @@ export function App() {
           {officeOpened && (
             <div hidden={tab !== "office"}>
               <Suspense fallback={<div className="office-stage loading">3D 오피스를 불러오는 중…</div>}>
-                <OfficeView state={state} models={models} onNavigate={setTab} active={tab === "office"} />
+                <OfficeView state={state} models={models} onNavigate={setTab} active={tab === "office"} people={people} />
               </Suspense>
             </div>
           )}
@@ -83,11 +111,16 @@ function CompanyHeader({
   provider,
   models,
   connected,
+  canAdmin,
+  children,
 }: {
   state: CompanyState;
   provider: string;
   models: ModelOption[];
   connected: boolean;
+  /** Company settings and Hermes connections belong to the owner once login is on. */
+  canAdmin: boolean;
+  children?: ReactNode;
 }) {
   const [editing, setEditing] = useState(false);
   const [gateways, setGateways] = useState(false);
@@ -121,6 +154,7 @@ function CompanyHeader({
         ) : (
           <button
             className="company-title"
+            disabled={!canAdmin}
             onClick={() => {
               setName(state.name);
               setMission(state.mission);
@@ -129,17 +163,17 @@ function CompanyHeader({
             title="회사 정보 수정"
           >
             <h1>{state.name}</h1>
-            <p className="muted">{state.mission || "미션을 설정하세요 ✎"}</p>
+            <p className="muted">{state.mission || (canAdmin ? "미션을 설정하세요 ✎" : "")}</p>
           </button>
         )}
       </div>
       <div className="header-meta">
-        <button className="btn small" onClick={() => setGateways(true)}>
+        <button className="btn small" onClick={() => setGateways(true)} disabled={!canAdmin}>
           Hermes 연결{state.gateways.length > 0 && <span className="count">{state.gateways.length}</span>}
         </button>
         <label className="row tight small">
           기본 모델
-          <select value={state.defaultModel} onChange={(e) => api.updateCompany({ defaultModel: e.target.value })}>
+          <select value={state.defaultModel} disabled={!canAdmin} onChange={(e) => api.updateCompany({ defaultModel: e.target.value })}>
             {models.map((m) => (
               <option key={m.id} value={m.id}>
                 {m.label}
@@ -151,6 +185,7 @@ function CompanyHeader({
           {provider === "mock" ? "Claude: 데모 모드" : "Claude 연결됨"}
         </span>
         <span className={`dot ${connected ? "on" : "off"}`} title={connected ? "실시간 연결됨" : "연결 끊김"} />
+        {children}
       </div>
       {gateways && <GatewaysDialog state={state} onClose={() => setGateways(false)} />}
     </header>
@@ -170,7 +205,10 @@ function ActivityFeed({ state }: { state: CompanyState }) {
       <ul>
         {[...state.activity].reverse().slice(0, 60).map((e) => (
           <li key={e.id} className={e.level === "error" ? "error-text" : ""}>
-            <span>{e.message}</span>
+            <span>
+              {e.message}
+              {e.by && <span className="muted"> · {e.by}</span>}
+            </span>
             <time className="muted">{timeAgo(e.at)}</time>
           </li>
         ))}

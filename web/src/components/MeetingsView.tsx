@@ -27,7 +27,7 @@ export function MeetingsView({ state }: { state: CompanyState }) {
             진행자가 회의를 열고, 이후엔 손을 든 사람 중 가장 오래 말하지 않은 사람이 발언합니다. @이름으로 지명할 수 있고, 대표님도 끼어들 수 있어요.
           </p>
         </div>
-        <button className="btn primary" onClick={() => setCreating(true)} disabled={state.agents.length < 2}>
+        <button className="btn primary needs-edit" onClick={() => setCreating(true)} disabled={state.agents.length < 2}>
           + 회의 소집
         </button>
       </div>
@@ -192,7 +192,7 @@ function MeetingRoom({ meeting, state }: { meeting: Meeting; state: CompanyState
 const VIA_LABEL: Record<string, string> = {
   opening: "진행",
   mention: "지명받음",
-  user_grant: "대표가 발언권 줌",
+  user_grant: "사람이 발언권 줌",
 };
 
 function Entry({
@@ -239,10 +239,10 @@ function Entry({
   const via = entry.via === "hand" ? (entry.reason ? `✋ ${entry.reason}` : "✋") : VIA_LABEL[entry.via];
   return (
     <div className={`utterance ${isUser ? "mine" : ""}`}>
-      {isUser ? <span className="avatar me">{USER_NAME.slice(0, 1)}</span> : <Avatar agent={agent} size={32} />}
+      {isUser ? <span className={`avatar me ${entry.authorName ? "teammate" : ""}`}>{(entry.authorName ?? USER_NAME).slice(0, 1)}</span> : <Avatar agent={agent} size={32} />}
       <div className="bubble">
         <div className="bubble-head">
-          <strong>{nameOf(entry.speakerId)}</strong> {!isUser && <span className="muted small">{agent?.role}</span>}
+          <strong>{isUser && entry.authorName ? entry.authorName : nameOf(entry.speakerId)}</strong> {!isUser && <span className="muted small">{agent?.role}</span>}
           {via && <span className="via">{via}</span>}
         </div>
         <div className="pre">
@@ -273,7 +273,7 @@ function Composer({ meeting, participants }: { meeting: Meeting; participants: A
   };
 
   return (
-    <div className="composer">
+    <div className="composer needs-edit">
       <div className="row tight">
         <span className="muted small">지명:</span>
         {participants.map((p) => (

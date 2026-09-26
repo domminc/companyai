@@ -12,7 +12,17 @@ import { KenneyAvatar, loadModel, modelFor } from "./kenney";
 import { buildOffice, disposeTree, type OfficeModel, setScreen } from "./furniture";
 import { buildLayout, type OfficeLayout, type Spot, type Vec2 } from "./layout";
 import { WalkGrid } from "./pathfinding";
-import { deskAssignments, type Errand, type Goal, type Overlay, planBossGoal, planGoals, planOverlays } from "./plan";
+import {
+  deskAssignments,
+  type Errand,
+  type Goal,
+  type Overlay,
+  planBossGoal,
+  planGoals,
+  planOverlays,
+  planVisitorGoals,
+  type Visitor,
+} from "./plan";
 
 export type CameraView = "overview" | "meeting" | "follow";
 
@@ -87,6 +97,10 @@ export class OfficeScene {
   private model?: OfficeModel;
   private actors = new Map<string, Actor>();
   private boss: Actor;
+  /** Signed-in teammates other than 대표, keyed by account id. */
+  private visitors = new Map<string, Actor>();
+  private visitorList: Visitor[] = [];
+  private pendingPeople?: { boss: string; visitors: Visitor[] };
   private errands = new Map<string, Errand>();
   private state?: CompanyState;
   private taskStatus = new Map<string, string>();
@@ -158,6 +172,11 @@ export class OfficeScene {
   update(state: CompanyState) {
     this.state = state;
     this.ensureLayout(state.agents.length);
+    if (this.pendingPeople) {
+      const people = this.pendingPeople;
+      this.pendingPeople = undefined;
+      this.setPeople(people);
+    }
     const now = performance.now();
 
     // A task that just finished sends its owner over to report.
@@ -191,6 +210,59 @@ export class OfficeScene {
     this.replan();
   }
 
+  /**
+   * Who is in the office besides the staff: 대표's name tag (with "(나)" for whoever is looking),
+   * and teammates who are signed in right now, who walk in and stand beside 대표's desk.
+   */
+  setPeople(people: { boss: string; visitors: Visitor[] }) {
+    if (!this.layout) {
+      this.pendingPeople = people; // the floor isn't built until the first state arrives
+      return;
+    }
+    if (this.boss.nameEl.textContent !== people.boss) {
+      this.boss.nameEl.textContent = people.boss;
+      this.boss.name = people.boss;
+      this.boss.bubbleKey = undefined;
+    }
+    this.visitorList = people.visitors;
+    const present = new Set(people.visitors.map((v) => v.id));
+    for (const v of people.visitors) {
+      let actor = this.visitors.get(v.id);
+      if (!actor || actor.leaving) {
+        if (actor) this.removeActor(actor);
+        actor = this.createActor(`visitor:${v.id}`, v.name);
+        actor.nameEl.classList.add("visitor");
+        this.placeStatic(actor, this.layout.entrance);
+        actor.arrivedAt = undefined;
+        this.visitors.set(v.id, actor);
+      }
+      if (actor.nameEl.textContent !== v.name) {
+        actor.nameEl.textContent = v.name;
+        actor.name = v.name;
+      }
+    }
+    for (const [id, actor] of this.visitors) {
+      if (present.has(id) || actor.leaving) continue;
+      actor.leaving = true;
+      actor.goal = { key: "leave", spot: this.layout.entrance, pose: "stand", activity: "idle" };
+      actor.path = this.grid.findPath(actor.pos, this.layout.entrance);
+      actor.arrivedAt = undefined;
+    }
+    this.planVisitors();
+  }
+
+  private planVisitors() {
+    if (!this.layout) return;
+    const goals = planVisitorGoals(this.visitorList, this.layout);
+    for (const [id, actor] of this.visitors) {
+      const goal = goals.get(id);
+      if (actor.leaving || !goal || goal.key === actor.goal?.key) continue;
+      actor.goal = goal;
+      actor.path = this.grid.findPath(actor.pos, goal.spot).slice(1);
+      actor.arrivedAt = undefined;
+    }
+  }
+
   setView(view: CameraView) {
     this.view = view;
     const table = this.layout.meeting.table;
@@ -212,7 +284,7 @@ export class OfficeScene {
     this.renderer.domElement.removeEventListener("pointerdown", this.onPointerDown);
     this.renderer.domElement.removeEventListener("pointerup", this.onPointerUp);
     this.controls.dispose();
-    for (const a of [...this.actors.values(), this.boss]) this.removeActor(a);
+    for (const a of [...this.actors.values(), ...this.visitors.values(), this.boss]) this.removeActor(a);
     if (this.model) disposeTree(this.model.root);
     this.renderer.dispose();
     this.renderer.domElement.remove();
@@ -247,7 +319,7 @@ export class OfficeScene {
 
     this.placeStatic(this.boss, layout.boss.seat);
     this.boss.goal = undefined;
-    for (const a of this.actors.values()) a.goal = undefined; // re-plan onto the new floor
+    for (const a of [...this.actors.values(), ...this.visitors.values()]) a.goal = undefined; // re-plan onto the new floor
     if (first) {
       const shot = this.overviewShot();
       this.controls.target.copy(shot.target);
@@ -275,7 +347,7 @@ export class OfficeScene {
   private upgradeAvatar(actor: Actor, model: string) {
     loadModel(model).then(
       (gltf) => {
-        const alive = actor === this.boss || this.actors.get(actor.id) === actor;
+        const alive = actor === this.boss || this.actors.get(actor.id) === actor || [...this.visitors.values()].includes(actor);
         if (alive && !this.disposed) actor.character.setAvatar(new KenneyAvatar(gltf));
       },
       (err) => {
@@ -378,6 +450,7 @@ export class OfficeScene {
       const stacked = actor.goal?.activity === "report" ? reporting++ : 0;
       actor.bubbleEl.style.translate = `0 ${-stacked * 38}px`;
     }
+    this.planVisitors();
     this.setBubble(this.boss, overlays.boss ? { text: overlays.boss, tone: "speech" } : undefined);
     // 대표 walks to the meeting room after joining, and back to the desk after.
     const bossGoal = planBossGoal(this.state, this.layout);
@@ -543,6 +616,13 @@ export class OfficeScene {
         }
       }
       this.stepActor(this.boss, dt, t, now);
+      for (const [id, actor] of this.visitors) {
+        this.stepActor(actor, dt, t, now);
+        if (actor.leaving && actor.path.length === 0) {
+          this.removeActor(actor);
+          this.visitors.delete(id);
+        }
+      }
     } while (remaining > 1e-6);
   }
 

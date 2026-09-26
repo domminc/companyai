@@ -1,6 +1,6 @@
 import { useEffect, useReducer, useState } from "react";
 import type { CompanyEvent, CompanyState } from "../../engine/types";
-import { api, type ModelOption } from "./api";
+import { api, LOGGED_OUT_EVENT, type ModelOption, type OnlineUser } from "./api";
 
 function upsert<T extends { id: string }>(list: T[], item: T): T[] {
   const i = list.findIndex((x) => x.id === item.id);
@@ -72,6 +72,8 @@ export interface CompanyStore {
   provider: string;
   models: ModelOption[];
   connected: boolean;
+  /** Who has the app open (only while login is on). */
+  online: OnlineUser[];
 }
 
 /** Live company state: initial snapshot over REST, then the SSE event stream. */
@@ -79,16 +81,28 @@ export function useCompany(): CompanyStore {
   const [state, dispatch] = useReducer(reduce, null);
   const [meta, setMeta] = useState<{ provider: string; models: ModelOption[] }>({ provider: "", models: [] });
   const [connected, setConnected] = useState(false);
+  const [online, setOnline] = useState<OnlineUser[]>([]);
 
   useEffect(() => {
     api.bootstrap().then(({ provider, models }) => setMeta({ provider, models }), () => {});
     // The stream opens with a full `state` event, so reconnects resync on their own.
     const source = new EventSource("/api/events");
     source.onopen = () => setConnected(true);
-    source.onerror = () => setConnected(false);
-    source.onmessage = (msg) => dispatch(JSON.parse(msg.data) as CompanyEvent);
+    source.onerror = () => {
+      setConnected(false);
+      // A stream that won't reopen may mean the session ended (logged out elsewhere, account removed).
+      api.me().then(
+        (me) => me.enabled && !me.user && window.dispatchEvent(new Event(LOGGED_OUT_EVENT)),
+        () => {},
+      );
+    };
+    source.onmessage = (msg) => {
+      const event = JSON.parse(msg.data) as CompanyEvent | { type: "presence"; online: OnlineUser[] };
+      if (event.type === "presence") setOnline(event.online);
+      else dispatch(event);
+    };
     return () => source.close();
   }, []);
 
-  return { state, connected, ...meta };
+  return { state, connected, online, ...meta };
 }

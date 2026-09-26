@@ -125,6 +125,8 @@ export interface SpeechEntry {
   at: string;
   /** Set once the speaker has finished this turn. */
   endedAt?: string;
+  /** A signed-in teammate other than 대표 who spoke (speakerId is still USER_SPEAKER). */
+  authorName?: string;
 }
 
 export interface PollEntry {
@@ -199,12 +201,16 @@ export interface ActivityEntry {
   at: string;
   level: "info" | "error";
   message: string;
+  /** The signed-in person whose action this was (only when login is on). */
+  by?: string;
 }
 
 export interface ChatMessage {
   id: string;
   from: "user" | "agent";
   content: string;
+  /** For "user" messages from a signed-in teammate other than 대표. */
+  authorName?: string;
   at: string;
   /** Set once an agent reply has finished streaming. */
   endedAt?: string;

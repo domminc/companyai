@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { type AgentBackend, ClaudeBackend, HermesBackend } from "./backends";
 import { describeHermesError, HermesClient, HermesError } from "./hermes";
@@ -67,6 +68,14 @@ import {
 const MAX_ACTIVITY = 200;
 /** Parallel polls per meeting step; Hermes rejects runs above its concurrency cap. */
 const MAX_CONCURRENT_POLLS = 4;
+
+/** Who is acting, when login is on. `owner` speaks as 대표; anyone else under their own name. */
+export interface Actor {
+  name: string;
+  owner: boolean;
+}
+
+const actorContext = new AsyncLocalStorage<Actor>();
 
 function cleanTools(tools?: AgentTool[]): AgentTool[] {
   return AGENT_TOOLS.filter((t) => tools?.includes(t));
@@ -225,6 +234,23 @@ export class Company {
 
   get provider() {
     return this.llm.name;
+  }
+
+  /** Runs a request on behalf of a signed-in person, so what it logs and says carries their name. */
+  as<T>(actor: Actor | undefined, fn: () => T): T {
+    return actor ? actorContext.run(actor, fn) : fn();
+  }
+
+  /** Puts something that happened outside the engine (accounts, settings) in the activity feed. */
+  note(message: string) {
+    this.log(message);
+    this.persist();
+  }
+
+  /** The teammate's name for things they say, unless they are 대표. */
+  private authorName(): string | undefined {
+    const actor = actorContext.getStore();
+    return actor && !actor.owner ? actor.name : undefined;
   }
 
   /** Current state with secrets (gateway and profile keys) removed. */
@@ -860,15 +886,16 @@ export class Company {
       this.state.chats.push(thread);
     }
     if (thread.replying) throw new EngineError(`${agent.name}님이 아직 답하는 중입니다.`, 409);
-    const history = thread.messages.filter((m) => !m.error).map(({ from, content }) => ({ from, content }));
-    thread.messages.push({ id: newId("msg"), from: "user", content: text, at: now() });
+    const history = thread.messages.filter((m) => !m.error).map(({ from, content, authorName }) => ({ from, content, authorName }));
+    const authorName = this.authorName();
+    thread.messages.push({ id: newId("msg"), from: "user", content: text, at: now(), ...(authorName ? { authorName } : {}) });
     const reply: ChatMessage = { id: newId("msg"), from: "agent", content: "", at: now() };
     thread.messages.push(reply);
     if (thread.messages.length > MAX_CHAT_MESSAGES) thread.messages.splice(0, thread.messages.length - MAX_CHAT_MESSAGES);
     thread.replying = true;
     this.emit({ type: "chat.updated", thread });
     this.persist();
-    this.track(this.runChat(agent, thread, reply, history, text));
+    this.track(() => this.runChat(agent, thread, reply, history, text, authorName));
     return thread;
   }
 
@@ -881,13 +908,20 @@ export class Company {
     this.persist();
   }
 
-  private async runChat(agent: Agent, thread: ChatThread, reply: ChatMessage, history: { from: "user" | "agent"; content: string }[], text: string) {
+  private async runChat(
+    agent: Agent,
+    thread: ChatThread,
+    reply: ChatMessage,
+    history: { from: "user" | "agent"; content: string; authorName?: string }[],
+    text: string,
+    authorName?: string,
+  ) {
     try {
       reply.content = await this.backendFor(agent).run(
         {
           identity: agentIdentity(agent),
           instructions: workplaceContext(agent, this.state),
-          prompt: chatPrompt(history, text, agent.name),
+          prompt: chatPrompt(history, text, agent.name, authorName),
           effort: "medium",
           context: { kind: "chat", agentName: agent.name, role: agent.role, message: text },
         },
@@ -964,7 +998,17 @@ export class Company {
     const meeting = this.getRunningMeeting(meetingId);
     const text = content?.trim();
     if (!text) throw new EngineError("발언 내용을 입력하세요.");
-    const entry: SpeechEntry = { kind: "speech", id: newId("spc"), speakerId: USER_SPEAKER, content: text, via: "user", at: now(), endedAt: now() };
+    const authorName = this.authorName();
+    const entry: SpeechEntry = {
+      kind: "speech",
+      id: newId("spc"),
+      speakerId: USER_SPEAKER,
+      content: text,
+      via: "user",
+      at: now(),
+      endedAt: now(),
+      ...(authorName ? { authorName } : {}),
+    };
     meeting.transcript.push(entry);
     const participants = meeting.participantIds.map((id) => this.state.agents.find((a) => a.id === id)).filter((a): a is Agent => !!a);
     for (const agentId of findMentions(text, participants)) this.queueFloor(meeting, agentId, "user");
@@ -1085,7 +1129,7 @@ export class Company {
     const idle = (id: string) => this.state.agents.find((a) => a.id === id)?.status === "idle";
 
     for (const meeting of this.state.meetings) {
-      if (meeting.status === "scheduled" && meeting.participantIds.every(idle)) this.track(this.runMeeting(meeting));
+      if (meeting.status === "scheduled" && meeting.participantIds.every(idle)) this.track(() => this.runMeeting(meeting));
     }
 
     const reserved = new Set(
@@ -1098,15 +1142,17 @@ export class Company {
         (t) => t.status === "review" && t.review.mode === "agent" && t.review.reviewerId === agent.id && !t.reviewing,
       );
       if (review) {
-        this.track(this.runReview(review, agent));
+        this.track(() => this.runReview(review, agent));
         continue;
       }
       const next = this.state.tasks.find((t) => t.status === "todo" && t.assigneeId === agent.id && this.depsDone(t));
-      if (next) this.track(this.runTask(next, agent));
+      if (next) this.track(() => this.runTask(next, agent));
     }
   }
 
-  private track(job: Promise<void>) {
+  /** Background work belongs to the company, not to whoever's request happened to start it. */
+  private track(start: () => Promise<void>) {
+    const job = actorContext.exit(start);
     this.jobs.add(job);
     job.finally(() => this.jobs.delete(job));
   }
@@ -1510,7 +1556,8 @@ export class Company {
   }
 
   private log(message: string, level: "info" | "error" = "info") {
-    const entry = { id: newId("act"), at: now(), level, message };
+    const by = actorContext.getStore()?.name;
+    const entry = { id: newId("act"), at: now(), level, message, ...(by ? { by } : {}) };
     this.state.activity.push(entry);
     if (this.state.activity.length > MAX_ACTIVITY) this.state.activity.splice(0, this.state.activity.length - MAX_ACTIVITY);
     this.emit({ type: "activity", entry });

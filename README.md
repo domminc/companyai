@@ -36,6 +36,8 @@ Hermes 직원을 써 보려면 상단 **Hermes 연결**에서 게이트웨이(�
 npm run fake-hermes       # http://127.0.0.1:8642, API 키 dev-key, 프로필 default·researcher·coder
 ```
 
+가짜 게이트웨이는 DeskRPG 플러그인의 칸반·크론도 흉내 냅니다. 배정된 카드는 대기 → 진행 중 → 완료로 저절로 넘어가고, "지금 실행"한 자동화는 잠시 실행 중이었다가 실행 기록을 남깁니다 (`FAKE_HERMES_WORK_MS`로 단계당 시간, `FAKE_HERMES_PLUGIN=0`이면 플러그인 없는 게이트웨이).
+
 데모 모드는 응답이 너무 빨라서 걸어가는 모습을 보기 전에 회의가 끝납니다. 천천히 보고 싶으면 지연을 늘리세요.
 
 ```bash
@@ -58,7 +60,11 @@ npm run build && npm start   # http://localhost:8787 에서 UI와 API를 함께 
 | **업무** | 칸반(할 일/진행 중/**검토**/완료/실패). 업무를 지시하면 담당자가 한가하고 **선행 업무**가 끝났을 때 자동으로 시작하고, 결과물이 실시간으로 스트리밍됩니다. **완료 조건**을 적을 수 있고, **검토자**(대표 / AI 동료 / 없음)를 정하면 결과물이 검토 칸으로 가서 승인 또는 수정 요청을 받습니다 |
 | **회의** | 주제·안건·참석자(첫 번째가 진행자)·1인당 발언 횟수를 정해 소집. 누가 손을 들었고 누가 PASS했는지, 지금 누가 발언 중인지 실시간으로 보입니다. 대표(사용자)도 **회의실에 들어가** 발언하고 `@이름`으로 지명하거나 발언권을 주고, 회의를 끝낼 수 있습니다. 끝나면 회의록·결정사항과 함께 완료 조건·선후관계가 붙은 **액션 아이템 초안**이 나오고, 대표가 고치거나 빼고 검토자를 정해 **업무로 등록**합니다 (소집할 때 "바로 배정"을 고르면 검토 없이 등록) |
 | **1:1 대화** | 직원(직원 화면·오피스에서 클릭)과 직접 대화. 답변은 실시간으로 오고, 답변 아래 **업무로 등록**을 누르면 그 내용으로 업무 지시 창이 열립니다. 대화 중인 직원은 오피스에서 💬 말풍선으로 답합니다 |
+| **Claude 직원 도구** | 채용·수정할 때 🔎 **웹 검색·페이지 읽기**, 🧪 **코드 실행**(Python 샌드박스)을 켤 수 있습니다. 업무·1:1 대화·검토에서만 쓰고 회의 발언에는 쓰지 않습니다. 쓰고 있는 도구(`web_search: 검색어`)가 업무 카드와 3D 말풍선에 보입니다 |
+| **Hermes 칸반** | 게이트웨이에 DeskRPG 플러그인이 있으면 나타나는 탭. 보드를 고르거나 만들고, 카드를 Hermes 직원(프로필)에게 배정하면 게이트웨이 워커가 알아서 처리합니다. 카드 결과·실행 기록 보기, 댓글, 완료 처리, 수정 요청, 다시 배정, 중단, 보관, 삭제 |
+| **자동화 (크론)** | Hermes 직원의 ⏰ **자동화**: "매일 오전 9시 업계 뉴스 요약"처럼 일정과 할 일을 정하면 게이트웨이의 크론이 앱이 꺼져 있어도 실행합니다. 지금 실행·일시정지·재개·삭제, 실행 기록과 결과 보기(플러그인 있을 때) |
 | **Hermes 연결** | Hermes API Server 등록·연결 확인·해제. 키는 서버의 `data/company.json`에만(평문) 저장되고 브라우저로는 나가지 않습니다 |
+| **로그인 (선택)** | 기본은 혼자 쓰는 모드라 로그인이 없습니다. 오른쪽 위 🔐 **로그인 설정**에서 소유자 계정을 만들면 로그인이 켜지고, **사람 관리**에서 멤버·보기 전용 계정을 추가할 수 있습니다. 접속 중인 사람은 머리글에 동그라미로, 3D 오피스에는 대표 책상 옆 **방문자**로 보입니다. 누가 한 일인지 활동 로그와 회의·대화에 이름이 남습니다 |
 | **활동** | 입사, 업무 시작/완료, 회의 시작/종료 등 회사의 모든 이벤트 로그 |
 
 ## 엔진 동작 규칙
@@ -87,15 +93,30 @@ npm run build && npm start   # http://localhost:8787 에서 UI와 API를 함께 
 7. 모두 PASS하거나, 발언 횟수를 다 쓰거나, 대표가 **회의 종료**를 누르면 끝납니다. 종료 요청은 현재 발언이 끝난 뒤 적용됩니다.
 8. Claude 키가 없고(데모 모드) Hermes 참석자가 있으면, 회의록은 Hermes 참석자가 작성합니다.
 
+### 로그인과 권한 (`server/auth.ts`)
+
+| 역할 | 할 수 있는 일 |
+|---|---|
+| 소유자 | 전부. 계정 관리, Hermes 연결, 회사 설정, 해고, 로그인 끄기 |
+| 멤버 | 채용, 업무 지시·검토, 회의 소집·발언, 1:1 대화, 칸반·자동화 |
+| 보기 전용 | 보기만 (변경 요청은 서버가 403으로 거절) |
+
+- 계정은 `data/auth.json`(권한 0600)에 scrypt 해시로 저장됩니다. 세션은 서명된 HttpOnly 쿠키(30일)이고, 비밀번호를 바꾸면 모든 기기에서 로그아웃됩니다.
+- 다른 사이트에서 온 변경 요청(Origin 불일치)은 거절하고, 로그인 실패는 IP당 10분에 10번으로 제한합니다.
+- 멤버가 회의에서 말하면 직원들에게는 "대표"가 아니라 그 사람 이름(사람 팀원)으로 전달됩니다.
+- 인터넷에 열 때는 HTTPS 리버스 프록시 뒤에 두세요 (`X-Forwarded-Proto: https`면 쿠키에 Secure가 붙습니다).
+
 ### Claude와 Hermes의 차이 (`engine/backends.ts`)
 
 | | Claude 직접 | Hermes 프로필 |
 |---|---|---|
 | 정체성 | 채용 시 적은 페르소나 | 프로필의 SOUL.md (앱은 페르소나를 보내지 않음) |
 | 앱이 보내는 것 | 페르소나 + 회사 맥락 + 회의 규칙 | 회사 맥락 + 회의 규칙 (`instructions`로 덧붙임) |
-| 도구 | 없음 (텍스트만) | 프로필에 켜진 도구·스킬·메모리 전부. 사용 중인 도구가 업무 카드에 표시됩니다 |
+| 도구 | 직원별로 고른 Anthropic 서버 도구 (웹 검색·웹 페치·코드 실행) | 프로필에 켜진 도구·스킬·메모리 전부. 사용 중인 도구가 업무 카드에 표시됩니다 |
+| 칸반·크론 | — | Hermes 칸반 카드 배정, 프로필 크론 자동화 (DeskRPG 플러그인 API) |
 | 호출 | Messages API 스트리밍 | `POST /p/<프로필>/v1/runs` + `GET /v1/runs/<id>/events` (SSE) |
 - 회의에서 나온 업무는 회의 요약·결정사항을 컨텍스트로 받아 진행합니다.
+- 서버는 15초마다(`COMPANYAI_HERMES_SYNC_MS`) 게이트웨이를 살펴 Hermes 직원이 칸반 카드나 크론 작업을 하고 있으면 3D 오피스 자리에서 일하는 모습(📋/⏰ 말풍선)으로 보여 주고, 카드가 끝나면 활동 로그에 남깁니다.
 - 상태는 `data/company.json`에 저장됩니다. 서버가 도중에 꺼지면 진행 중이던 업무는 `할 일`로 되돌아가 다시 실행되고, 진행 중이던 회의는 `실패`로 표시됩니다.
 
 ## 구조
@@ -106,13 +127,15 @@ engine/            # UI와 무관한 순수 엔진 (다른 앱에서도 import �
   meeting.ts       # 회의 규칙(프로토콜), 손들기/발언 프롬프트, SPEAK/PASS 파싱, @지명, 발언자 선정
   backends.ts      # AgentBackend: ClaudeBackend / HermesBackend
   hermes.ts        # Hermes API Server 클라이언트 (Runs API + SSE, 429 재시도)
-  llm.ts           # LLM 인터페이스 + AnthropicLLM(Claude) + MockLLM
+  hermes-ops.ts    # Hermes 크론 잡·칸반 (DeskRPG 플러그인 API, 크론은 /api/jobs 폴백)
+  llm.ts           # LLM 인터페이스 + AnthropicLLM(Claude, 서버 도구·pause_turn 재개) + MockLLM
   prompts.ts       # 정체성/회사 맥락/업무/서기/리크루터 프롬프트와 JSON 스키마
   store.ts         # JsonFileStore / MemoryStore
   types.ts         # Agent, Task, Meeting, CompanyEvent ...
   *.test.ts        # 엔진·회의 발언권·Hermes 연동 테스트
   testing/         # 가짜 Hermes 게이트웨이, 스크립트 LLM
-server/index.ts    # REST API + SSE(/api/events) + 빌드된 UI 서빙
+server/index.ts    # REST API + SSE(/api/events) + 빌드된 UI 서빙 + 권한 검사 + 접속자
+server/auth.ts     # 선택적 로그인: 계정·역할·서명 쿠키
 web/public/models/kenney/  # Kenney Mini Characters (CC0) — License.txt 포함
 web/               # React + Vite UI
   src/office/      # 3D 오피스 (three.js)
@@ -169,6 +192,24 @@ await company.settle(); // 모든 업무와 회의가 끝날 때까지 대기
 | POST | `/api/meetings/:id/outcome` | `{ items?: [{ title?, description?, acceptance?, assigneeId?, include? } \| null], review? }` 초안을 업무로 등록 |
 | POST | `/api/meetings/:id/cancel` | 대기 중인 회의 취소 |
 | POST | `/api/meetings/:id/action-items/:index/promote` | 액션 아이템을 업무로 |
+| GET / POST | `/api/agents/:id/automations` | Hermes 직원의 자동화 목록(`source: plugin \| core`) / 만들기 `{ name, schedule, prompt }` |
+| PATCH / DELETE | `/api/agents/:id/automations/:job` | 자동화 수정 / 삭제 |
+| POST | `/api/agents/:id/automations/:job/(run\|pause\|resume)` | 지금 실행 / 일시정지 / 재개 |
+| GET | `/api/agents/:id/automations/:job/runs` | 실행 기록 (플러그인) |
+| GET | `/api/gateways/:id/kanban` | 플러그인 유무와 보드 목록 |
+| POST | `/api/gateways/:id/kanban/boards` | `{ slug, name }` 보드 만들기 |
+| GET | `/api/gateways/:id/kanban/boards/:board` | 보드 (열과 카드) |
+| POST | `/api/gateways/:id/kanban/boards/:board/cards` | `{ title, body?, assigneeId? \| assignee?, priority?, triage? }` 카드 만들기 |
+| GET / DELETE | `/api/gateways/:id/kanban/boards/:board/cards/:card` | 카드 상세(결과·댓글·실행) / 삭제 |
+| POST | `/api/gateways/:id/kanban/boards/:board/cards/:card/comments` | `{ body }` 댓글 |
+| POST | `/api/gateways/:id/kanban/boards/:board/cards/:card/actions/:action` | `approve`, `request-changes {comment}`, `reassign {agentId}`, `unblock`, `terminate`, `archive` 등 |
+| GET | `/api/auth/me` | `{ enabled, user }` |
+| POST | `/api/auth/setup` · `/login` · `/logout` | 소유자 계정 만들기(로그인 켜기) · 로그인 · 로그아웃 |
+| PATCH | `/api/auth/me` | 내 표시 이름·비밀번호 |
+| POST | `/api/auth/disable` | `{ password }` 로그인 끄기 (소유자) |
+| GET / POST / PATCH / DELETE | `/api/users[/:id]` | 계정 관리 (소유자) |
+
+로그인이 켜져 있으면 `GET`은 보기 전용 이상, 변경은 멤버 이상, 회사 설정·Hermes 연결·해고·계정 관리는 소유자만 할 수 있습니다. SSE는 `presence` 이벤트(`{ online: [{ id, displayName, role }] }`)도 보냅니다.
 
 ## 모델
 
@@ -179,15 +220,15 @@ Opus 계열 요청에는 서버 측 거절 폴백(`fallbacks: "default"`)이 켜
 ## 개발
 
 ```bash
-npm test          # 엔진 테스트
+npm test          # 엔진·서버(계정)·3D 계획 테스트
 npm run typecheck
 ```
 
 ## 다음에 해볼 만한 것
 
-- Hermes 칸반·크론 연동 (DeskRPG 플러그인 API)
-- Claude 직원에게 도구 쥐여주기 (웹 검색, 코드 실행) — Claude tool use
-- 여러 사람이 같은 오피스에 접속 (로그인, 권한)
+- 칸반 카드 결과물(첨부 파일·아티팩트) 보기
+- 크론 자동화 결과를 회사 업무로 가져오기
+- 방문자끼리 3D 오피스에서 채팅
 
 ## 참고
 

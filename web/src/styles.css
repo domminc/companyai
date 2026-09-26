@@ -1114,6 +1114,10 @@ button.card:hover {
   background: #1f2937;
   color: #fff;
 }
+.office-name.visitor {
+  background: #0f766e;
+  color: #fff;
+}
 .office-name .dot {
   width: 7px;
   height: 7px;
@@ -1594,4 +1598,89 @@ pre.code {
   overflow-x: auto;
   text-align: left;
   font-size: 12px;
+}
+
+/* ---------- accounts & presence ---------- */
+.app.readonly .needs-edit {
+  display: none !important;
+}
+.readonly-banner {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-radius: 8px;
+  padding: 6px 12px;
+  font-size: 13px;
+  margin-bottom: 10px;
+}
+.account-area .online {
+  display: flex;
+}
+.online-dot {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  display: inline-grid;
+  place-items: center;
+  font-size: 12px;
+  font-weight: 700;
+  color: #fff;
+  background: #0f766e;
+  border: 2px solid var(--surface);
+  margin-left: -6px;
+}
+.online-dot:first-child {
+  margin-left: 0;
+}
+.online-dot.role-owner {
+  background: #1f2937;
+}
+.online-dot.role-viewer {
+  background: #64748b;
+}
+.online-dot.me {
+  outline: 2px solid var(--accent);
+}
+.avatar.me.teammate {
+  background: #0f766e;
+}
+.login-screen {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+}
+.login-card {
+  width: min(380px, 100%);
+  padding: 24px;
+}
+.login-card h1 {
+  margin: 0;
+  font-size: 20px;
+}
+.login-card .logo {
+  font-size: 32px;
+}
+table.people {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+table.people th,
+table.people td {
+  text-align: left;
+  padding: 6px 4px;
+  border-bottom: 1px solid var(--border);
+}
+table.people select {
+  width: auto;
+}
+.danger-zone {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 12px;
+}
+.danger-zone summary {
+  cursor: pointer;
+  color: var(--danger);
+  font-size: 13px;
 }

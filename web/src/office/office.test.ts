@@ -3,7 +3,7 @@ import { test } from "node:test";
 import type { Agent, CompanyState, Meeting } from "../../../engine/types";
 import { buildLayout, DESK_D, DESK_W, type Vec2 } from "./layout";
 import { WalkGrid } from "./pathfinding";
-import { deskAssignments, type Errand, planBossGoal, planGoals, planOverlays } from "./plan";
+import { deskAssignments, type Errand, planBossGoal, planGoals, planOverlays, planVisitorGoals } from "./plan";
 
 function agent(id: string, status: Agent["status"] = "idle", hiredAt = `2026-01-01T00:00:0${id.length}Z`): Agent {
   return {
@@ -68,6 +68,7 @@ test("every seat, desk and the report spot can be reached from the entrance", ()
       layout.boss.reportSpot,
       layout.boss.seat,
       layout.meeting.hostSpot,
+      ...layout.boss.visitorSpots,
     ];
     for (const t of targets) {
       const path = grid.findPath(layout.entrance, t);
@@ -219,4 +220,17 @@ test("a Hermes employee busy on a kanban card or cron job works at their desk an
   assert.deepEqual(agents.get("a")!.bubble, { text: "📋 경쟁사 가격표 정리", tone: "work" });
   assert.deepEqual(agents.get("bb")!.bubble, { text: "⏰ 아침 브리핑", tone: "work" });
   assert.equal(agents.get("a")!.typing, true);
+});
+
+test("visitors stand on open floor beside 대표's desk, one spot each", () => {
+  for (const n of [3, 12, 20]) {
+    const layout = buildLayout(n);
+    const grid = new WalkGrid(layout);
+    for (const spot of layout.boss.visitorSpots) assert.ok(grid.walkable(spot), `visitor spot ${spot.x},${spot.z} is blocked`);
+  }
+  const layout = buildLayout(3);
+  const goals = planVisitorGoals([{ id: "u1", name: "김팀원" }, { id: "u2", name: "이관람" }], layout);
+  assert.deepEqual(goals.get("u1")!.spot, layout.boss.visitorSpots[0]);
+  assert.deepEqual(goals.get("u2")!.spot, layout.boss.visitorSpots[1]);
+  assert.equal(goals.get("u2")!.pose, "stand");
 });

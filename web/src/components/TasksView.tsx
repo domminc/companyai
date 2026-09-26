@@ -39,7 +39,7 @@ export function TasksView({ state }: { state: CompanyState }) {
             {waitingForMe > 0 && <strong className="attention"> 대표 검토 대기 {waitingForMe}건</strong>}
           </p>
         </div>
-        <button className="btn primary" onClick={() => setCreating(true)} disabled={state.agents.length === 0}>
+        <button className="btn primary needs-edit" onClick={() => setCreating(true)} disabled={state.agents.length === 0}>
           + 업무 지시
         </button>
       </div>

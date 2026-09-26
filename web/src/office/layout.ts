@@ -37,7 +37,8 @@ export interface OfficeLayout {
   depth: number;
   entrance: Spot;
   desks: Desk[];
-  boss: { desk: Vec2; seat: Spot; reportSpot: Spot };
+  /** visitorSpots: where signed-in teammates stand, beside 대표's desk. */
+  boss: { desk: Vec2; seat: Spot; reportSpot: Spot; visitorSpots: Spot[] };
   meeting: {
     room: { x: number; z: number; w: number; d: number };
     table: { x: number; z: number; rx: number; rz: number };
@@ -130,6 +131,12 @@ export function buildLayout(agentCount: number): OfficeLayout {
     desk: bossDesk,
     seat: { x: bossDesk.x, z: bossDesk.z - 0.8, facing: FACING_FRONT },
     reportSpot: { x: bossDesk.x - 0.4, z: bossDesk.z + 1.25, facing: FACING_BACK },
+    // Two columns of three to the left of the desk, turned towards it.
+    visitorSpots: Array.from({ length: 6 }, (_, i) => ({
+      x: bossDesk.x - 1.75 - Math.floor(i / 3) * 0.65,
+      z: bossDesk.z - 0.5 + (i % 3) * 0.7,
+      facing: Math.PI / 2,
+    })),
   };
 
   // Lounge below it: two sofas around a coffee table.

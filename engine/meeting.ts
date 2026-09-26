@@ -35,6 +35,12 @@ ${USER_DISPLAY_NAME} is the human who runs the company; treat what they say as d
 Reply in the language of the meeting topic.
 </meeting-protocol>`;
 
+/** Who said this entry: an agent, 대표, or a signed-in human teammate. */
+export function entrySpeaker(entry: SpeechEntry, state: CompanyState): string {
+  if (entry.speakerId === USER_SPEAKER && entry.authorName) return `${entry.authorName} (human teammate)`;
+  return speakerName(entry.speakerId, state);
+}
+
 export function speakerName(id: string, state: CompanyState): string {
   if (id === USER_SPEAKER) return USER_DISPLAY_NAME;
   return state.agents.find((a) => a.id === id)?.name ?? "(퇴사자)";
@@ -50,7 +56,7 @@ function transcriptText(meeting: Meeting, state: CompanyState, opts: { last?: nu
   return picked
     .map((s) => {
       const text = opts.clip && s.content.length > opts.clip ? `${s.content.slice(0, opts.clip)}…` : s.content;
-      return `[${speakerName(s.speakerId, state)}] ${text.trim()}`;
+      return `[${entrySpeaker(s, state)}] ${text.trim()}`;
     })
     .join("\n\n");
 }

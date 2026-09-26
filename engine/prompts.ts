@@ -1,4 +1,4 @@
-import { speakerName, USER_DISPLAY_NAME } from "./meeting";
+import { entrySpeaker, speakerName, USER_DISPLAY_NAME } from "./meeting";
 import type { Agent, CompanyState, Meeting, SpeechEntry, Task } from "./types";
 
 const LANGUAGE_RULE = "Reply in the same language the request is written in.";
@@ -103,16 +103,24 @@ export function parseVerdict(text: string): { verdict: "approved" | "changes" | 
 
 export const CHAT_MARKER = "💬 [1:1 chat";
 
-export function chatPrompt(history: { from: "user" | "agent"; content: string }[], message: string, agentName: string): string {
+export function chatPrompt(
+  history: { from: "user" | "agent"; content: string; authorName?: string }[],
+  message: string,
+  agentName: string,
+  authorName?: string,
+): string {
   const past = history
     .slice(-20)
-    .map((m) => `[${m.from === "user" ? USER_DISPLAY_NAME : agentName}] ${m.content}`)
+    .map((m) => `[${m.from === "user" ? (m.authorName ?? USER_DISPLAY_NAME) : agentName}] ${m.content}`)
     .join("\n\n");
+  const who = authorName ?? USER_DISPLAY_NAME;
   return [
-    `${CHAT_MARKER} with ${USER_DISPLAY_NAME}]`,
-    `${USER_DISPLAY_NAME} runs the company and is talking to you directly.`,
+    `${CHAT_MARKER} with ${who}]`,
+    authorName
+      ? `${authorName} is a human teammate at the company (${USER_DISPLAY_NAME} runs it) and is talking to you directly.`
+      : `${USER_DISPLAY_NAME} runs the company and is talking to you directly.`,
     past ? `Conversation so far:\n---\n${past}\n---` : "",
-    `${USER_DISPLAY_NAME}: ${message}`,
+    `${who}: ${message}`,
     "",
     "Reply as yourself, conversationally and concisely. If this is a request for real work, sketch the deliverable",
     "and its done-criteria briefly; 대표 can register it as a task from this chat. Do not claim a task was created.",
@@ -135,7 +143,7 @@ export function minutesPrompt(meeting: Meeting, state: CompanyState): string {
     .filter((a): a is Agent => !!a);
   const transcript = meeting.transcript
     .filter((e): e is SpeechEntry => e.kind === "speech" && !!e.content.trim())
-    .map((e) => `${speakerName(e.speakerId, state)}: ${e.content}`)
+    .map((e) => `${entrySpeaker(e, state)}: ${e.content}`)
     .join("\n\n");
   return [
     `Meeting topic: ${meeting.topic}`,

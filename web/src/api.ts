@@ -13,6 +13,7 @@ import type {
   TaskReview,
 } from "../../engine/types";
 import type { ActionItemEdit } from "../../engine/company";
+import type { Role, User } from "../../server/auth";
 import type {
   HermesJob,
   HermesJobRun,
@@ -24,6 +25,23 @@ import type {
   KanbanCard,
   KanbanCardDetail,
 } from "../../engine/hermes-ops";
+
+export type { Role, User };
+
+/** Someone with the app open right now (only reported while login is on). */
+export interface OnlineUser {
+  id: string;
+  displayName: string;
+  role: Role;
+}
+
+export interface AuthInfo {
+  enabled: boolean;
+  user: User | null;
+}
+
+/** Fired when the server says the session is gone, so the app can show the login screen. */
+export const LOGGED_OUT_EVENT = "companyai:logged-out";
 
 export type { HermesJob, HermesJobRun, JobInput, KanbanAction, KanbanBoard, KanbanBoardMeta, KanbanCard, KanbanCardDetail };
 
@@ -48,11 +66,23 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     body: body ? JSON.stringify(body) : undefined,
   });
   const data = await res.json().catch(() => ({}));
+  if (res.status === 401 && data.login) window.dispatchEvent(new Event(LOGGED_OUT_EVENT));
   if (!res.ok) throw new Error(data.error ?? `요청 실패 (${res.status})`);
   return data as T;
 }
 
 export const api = {
+  me: () => request<AuthInfo>("GET", "/auth/me"),
+  setupLogin: (input: { username: string; password: string; displayName: string }) => request<AuthInfo>("POST", "/auth/setup", input),
+  login: (username: string, password: string) => request<AuthInfo>("POST", "/auth/login", { username, password }),
+  logout: () => request<{ ok: true }>("POST", "/auth/logout", {}),
+  disableLogin: (password: string) => request<AuthInfo>("POST", "/auth/disable", { password }),
+  updateMe: (patch: { displayName?: string; password?: string }) => request<User>("PATCH", "/auth/me", patch),
+  users: () => request<User[]>("GET", "/users"),
+  createUser: (input: { username: string; password: string; displayName: string; role: Role }) => request<User>("POST", "/users", input),
+  updateUser: (id: string, patch: { displayName?: string; password?: string; role?: Role }) => request<User>("PATCH", `/users/${id}`, patch),
+  deleteUser: (id: string) => request<{ ok: true }>("DELETE", `/users/${id}`),
+
   bootstrap: () => request<Bootstrap>("GET", "/state"),
   updateCompany: (patch: { name?: string; mission?: string; defaultModel?: string }) =>
     request<CompanyState>("PATCH", "/company", patch),

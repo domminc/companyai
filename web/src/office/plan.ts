@@ -127,6 +127,19 @@ export function planBossGoal(state: CompanyState, layout: OfficeLayout): Goal {
   return { key: "boss-desk", spot: layout.boss.seat, pose: "sit", activity: "idle" };
 }
 
+export interface Visitor {
+  id: string;
+  name: string;
+}
+
+/** Signed-in teammates other than 대표 stand beside 대표's desk, in the order they arrived. */
+export function planVisitorGoals(visitors: Visitor[], layout: OfficeLayout): Map<string, Goal> {
+  const spots = layout.boss.visitorSpots;
+  return new Map(
+    visitors.map((v, i) => [v.id, { key: `visit:${i % spots.length}`, spot: spots[i % spots.length], pose: "stand" as const, activity: "idle" as const }]),
+  );
+}
+
 export function planOverlays(state: CompanyState, errands: Map<string, Errand>): Overlays {
   const agents = new Map<string, Overlay>();
   const meetings = runningMeetings(state);

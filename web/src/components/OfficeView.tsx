@@ -13,12 +13,15 @@ export function OfficeView({
   models,
   onNavigate,
   active = true,
+  people,
 }: {
   state: CompanyState;
   models: ModelOption[];
   onNavigate: (tab: Tab) => void;
   /** False while another tab is showing: the scene keeps simulating but stops drawing. */
   active?: boolean;
+  /** 대표's name tag and signed-in teammates, who show up as visitors. */
+  people: { boss: string; visitors: { id: string; name: string }[] };
 }) {
   const host = useRef<HTMLDivElement>(null);
   const scene = useRef<OfficeScene | null>(null);
@@ -55,6 +58,12 @@ export function OfficeView({
   useEffect(() => {
     scene.current?.select(selected);
   }, [selected]);
+
+  const peopleKey = JSON.stringify(people);
+  useEffect(() => {
+    scene.current?.setPeople(people);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [peopleKey]);
 
   useEffect(() => {
     scene.current?.setActive(active);
@@ -106,7 +115,7 @@ export function OfficeView({
             <span className="hud-chip">회의실 비어 있음</span>
           )}
           {meeting && (
-            <button className="hud-chip" onClick={() => api.joinMeeting(meeting.id, !meeting.userJoined)}>
+            <button className="hud-chip needs-edit" onClick={() => api.joinMeeting(meeting.id, !meeting.userJoined)}>
               {meeting.userJoined ? "🪑 자리로 돌아가기" : "🚪 회의 참석"}
             </button>
           )}
@@ -220,7 +229,7 @@ function AgentPanel({
       )}
       {queued.length > 0 && <p className="muted small">대기 중인 업무 {queued.length}건</p>}
       <form
-        className="stack tight-stack"
+        className="stack tight-stack needs-edit"
         onSubmit={(e) => {
           e.preventDefault();
           create.run(async () => {

@@ -1,9 +1,21 @@
 import { createReadStream, existsSync, statSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { extname, join, normalize, resolve } from "node:path";
-import { Company, EngineError } from "../engine/company";
+import { dirname, extname, join, normalize, resolve } from "node:path";
+import { type Actor, Company, EngineError } from "../engine/company";
 import { AnthropicLLM, AVAILABLE_MODELS, type LLM, MockLLM } from "../engine/llm";
 import { JsonFileStore } from "../engine/store";
+import {
+  atLeast,
+  AuthError,
+  AuthStore,
+  clearedCookie,
+  FailureLimiter,
+  readCookie,
+  type Role,
+  SESSION_COOKIE,
+  sessionCookie,
+  type User,
+} from "./auth";
 
 try {
   process.loadEnvFile();
@@ -25,39 +37,156 @@ function chooseLLM(): LLM {
 }
 
 const company = await Company.open({ llm: chooseLLM(), store: new JsonFileStore(DATA_FILE) });
+const auth = await AuthStore.open(process.env.COMPANYAI_AUTH ?? join(dirname(DATA_FILE), "auth.json"));
+const loginLimiter = new FailureLimiter();
 
 // ------------------------------------------------------------------ routing
 
-type Handler = (ctx: { params: Record<string, string>; body: any }) => unknown | Promise<unknown>;
-const routes: { method: string; pattern: RegExp; keys: string[]; handler: Handler }[] = [];
+interface Ctx {
+  params: Record<string, string>;
+  body: any;
+  /** The signed-in person; undefined while login is off. */
+  user?: User;
+  req: IncomingMessage;
+  res: ServerResponse;
+}
+type Handler = (ctx: Ctx) => unknown | Promise<unknown>;
+/** Who may call a route when login is on. By default reads need a viewer, changes a member. */
+type Access = Role | "public";
+const routes: { method: string; pattern: RegExp; keys: string[]; handler: Handler; access: Access }[] = [];
 
-function route(method: string, path: string, handler: Handler) {
+function route(method: string, path: string, handler: Handler, access?: Access) {
   const keys: string[] = [];
   const pattern = new RegExp(
     "^" + path.replace(/:(\w+)/g, (_, k) => (keys.push(k), "([^/]+)")) + "$",
   );
-  routes.push({ method, pattern, keys, handler });
+  routes.push({ method, pattern, keys, handler, access: access ?? (method === "GET" ? "viewer" : "member") });
 }
+
+function actorOf(user?: User): Actor | undefined {
+  return user && { name: user.displayName, owner: user.role === "owner" };
+}
+
+// ------------------------------------------------------------------ accounts
+
+function isSecure(req: IncomingMessage) {
+  return req.headers["x-forwarded-proto"] === "https";
+}
+
+function signIn(ctx: Ctx, user: User) {
+  const { token, maxAge } = auth.issue(user.id);
+  ctx.res.setHeader("set-cookie", sessionCookie(token, maxAge, isSecure(ctx.req)));
+}
+
+route("GET", "/api/auth/me", ({ user }) => ({ enabled: auth.enabled, user: user ?? null }), "public");
+route(
+  "POST",
+  "/api/auth/setup",
+  async (ctx) => {
+    const user = await auth.setup(ctx.body);
+    // Tabs that were open without login lose their stream and land on the login screen.
+    presence.closeAll();
+    signIn(ctx, user);
+    company.as(actorOf(user), () => company.note(`${user.displayName}님이 소유자 계정을 만들어 로그인을 켰습니다.`));
+    return { enabled: true, user };
+  },
+  "public",
+);
+route(
+  "POST",
+  "/api/auth/login",
+  async (ctx) => {
+    const key = ctx.req.socket.remoteAddress ?? "?";
+    loginLimiter.check(key);
+    try {
+      const user = await auth.login(ctx.body.username, ctx.body.password);
+      loginLimiter.reset(key);
+      signIn(ctx, user);
+      return { enabled: true, user };
+    } catch (err) {
+      loginLimiter.fail(key);
+      throw err;
+    }
+  },
+  "public",
+);
+route(
+  "POST",
+  "/api/auth/logout",
+  ({ res }) => {
+    res.setHeader("set-cookie", clearedCookie());
+    return { ok: true };
+  },
+  "public",
+);
+route(
+  "POST",
+  "/api/auth/disable",
+  async ({ user, body, res }) => {
+    if (!user) throw new AuthError("로그인이 이미 꺼져 있습니다.");
+    await auth.disable(user.id, body.password);
+    res.setHeader("set-cookie", clearedCookie());
+    company.note(`${user.displayName}님이 로그인을 껐습니다. 이제 누구나 바로 들어올 수 있습니다.`);
+    presence.closeAll();
+    return { enabled: false, user: null };
+  },
+  "owner",
+);
+route("PATCH", "/api/auth/me", async ({ user, body }) => {
+  if (!user) throw new AuthError("로그인이 꺼져 있습니다.");
+  const updated = await auth.update(user.id, { displayName: body.displayName, password: body.password });
+  presence.refresh(updated);
+  return updated;
+}, "viewer");
+
+/** Accounts only make sense once there is an owner to manage them. */
+function requireLogin() {
+  if (!auth.enabled) throw new AuthError("먼저 🔐 로그인 설정에서 소유자 계정을 만드세요.", 409);
+}
+
+route("GET", "/api/users", () => (requireLogin(), auth.users()), "owner");
+route("POST", "/api/users", async ({ body }) => {
+  requireLogin();
+  const created = await auth.create(body);
+  company.note(`${created.displayName}님(${created.role})의 계정을 만들었습니다.`);
+  return created;
+}, "owner");
+route("PATCH", "/api/users/:id", async ({ params, body }) => {
+  requireLogin();
+  const updated = await auth.update(params.id, body);
+  presence.refresh(updated);
+  if (body.password !== undefined) presence.close(params.id);
+  return updated;
+}, "owner");
+route("DELETE", "/api/users/:id", async ({ params, user }) => {
+  requireLogin();
+  const target = auth.get(params.id);
+  await auth.remove(params.id);
+  presence.close(params.id);
+  if (params.id === user?.id) presence.closeAll();
+  if (target) company.note(`${target.displayName}님의 계정을 지웠습니다.`);
+  return { ok: true };
+}, "owner");
 
 route("GET", "/api/state", () => ({
   state: company.snapshot(),
   provider: company.provider,
   models: AVAILABLE_MODELS,
 }));
-route("PATCH", "/api/company", ({ body }) => (company.updateCompany(body), company.snapshot()));
+route("PATCH", "/api/company", ({ body }) => (company.updateCompany(body), company.snapshot()), "owner");
 
 route("POST", "/api/recruit", ({ body }) => company.recruit(String(body.jobDescription ?? "")));
 route("GET", "/api/gateways", () => company.snapshot().gateways);
-route("POST", "/api/gateways", ({ body }) => company.addGateway(body));
+route("POST", "/api/gateways", ({ body }) => company.addGateway(body), "owner");
 route("POST", "/api/gateways/:id/test", ({ params }) => company.testGateway(params.id));
-route("DELETE", "/api/gateways/:id", ({ params }) => (company.removeGateway(params.id), { ok: true }));
+route("DELETE", "/api/gateways/:id", ({ params }) => (company.removeGateway(params.id), { ok: true }), "owner");
 
 route("POST", "/api/agents", async ({ body }) => {
   if (body.hermes) await company.verifyHermesProfile(body.hermes);
   return company.hire(body);
 });
 route("PATCH", "/api/agents/:id", ({ params, body }) => company.updateAgent(params.id, body));
-route("DELETE", "/api/agents/:id", ({ params }) => (company.fire(params.id), { ok: true }));
+route("DELETE", "/api/agents/:id", ({ params }) => (company.fire(params.id), { ok: true }), "owner");
 
 // Hermes employees' automations (cron jobs on their profile)
 route("GET", "/api/agents/:id/automations", ({ params }) => company.listAutomations(params.id));
@@ -125,7 +254,46 @@ async function readBody(req: IncomingMessage): Promise<any> {
   }
 }
 
-function handleEvents(req: IncomingMessage, res: ServerResponse) {
+/**
+ * Who is here: one entry per open event stream. With login on, everyone online is shown to
+ * everyone (and walks around the 3D office as a visitor).
+ */
+const presence = (() => {
+  /** Each open stream, with how to shut it down (end the response and stop its subscription). */
+  const conns = new Map<ServerResponse, { user?: User; close: () => void }>();
+  const online = () => {
+    const seen = new Map<string, User>();
+    for (const { user } of conns.values()) if (user) seen.set(user.id, user);
+    return [...seen.values()].map(({ id, displayName, role }) => ({ id, displayName, role }));
+  };
+  const broadcast = () => {
+    const frame = `data: ${JSON.stringify({ type: "presence", online: online() })}\n\n`;
+    for (const res of conns.keys()) res.write(frame);
+  };
+  return {
+    add(res: ServerResponse, user: User | undefined, close: () => void) {
+      conns.set(res, { user, close });
+      broadcast();
+    },
+    remove(res: ServerResponse) {
+      if (conns.delete(res)) broadcast();
+    },
+    /** A changed name or role shows up at once. */
+    refresh(user: User) {
+      for (const conn of conns.values()) if (conn.user?.id === user.id) conn.user = user;
+      broadcast();
+    },
+    /** A removed account (or changed password) loses its live streams. */
+    close(userId: string) {
+      for (const conn of [...conns.values()]) if (conn.user?.id === userId) conn.close();
+    },
+    closeAll() {
+      for (const conn of [...conns.values()]) conn.close();
+    },
+  };
+})();
+
+function handleEvents(req: IncomingMessage, res: ServerResponse, user?: User) {
   res.writeHead(200, {
     "content-type": "text/event-stream",
     "cache-control": "no-cache",
@@ -135,10 +303,17 @@ function handleEvents(req: IncomingMessage, res: ServerResponse) {
   send({ type: "state", state: company.snapshot() });
   const unsubscribe = company.subscribe(send);
   const ping = setInterval(() => res.write(": ping\n\n"), 20_000);
-  req.on("close", () => {
+  let closed = false;
+  const close = () => {
+    if (closed) return;
+    closed = true;
     clearInterval(ping);
     unsubscribe();
-  });
+    presence.remove(res);
+    res.end();
+  };
+  presence.add(res, user, close);
+  req.on("close", close);
 }
 
 const MIME: Record<string, string> = {
@@ -167,22 +342,48 @@ function serveStatic(pathname: string, res: ServerResponse) {
   createReadStream(file).pipe(res);
 }
 
+/** Browsers send Origin on cross-site requests; a change from another site is refused. */
+function crossSite(req: IncomingMessage): boolean {
+  const origin = req.headers.origin;
+  if (!origin) return false;
+  try {
+    return new URL(origin).host !== req.headers.host;
+  } catch {
+    return true;
+  }
+}
+
 const server = createServer(async (req, res) => {
   const url = new URL(req.url ?? "/", "http://localhost");
   const method = req.method ?? "GET";
-
-  if (url.pathname === "/api/events" && method === "GET") return handleEvents(req, res);
   if (!url.pathname.startsWith("/api/")) return serveStatic(url.pathname, res);
+
+  const user = auth.enabled ? auth.verify(readCookie(req.headers.cookie, SESSION_COOKIE)) : undefined;
+  const needLogin = () => sendJSON(res, 401, { error: "로그인이 필요합니다.", login: true });
+
+  if (url.pathname === "/api/events" && method === "GET") {
+    if (auth.enabled && !user) return needLogin();
+    return handleEvents(req, res, user);
+  }
+  if (method !== "GET" && crossSite(req)) return sendJSON(res, 403, { error: "다른 사이트에서 온 요청은 받지 않습니다." });
 
   for (const r of routes) {
     const match = r.method === method && url.pathname.match(r.pattern);
     if (!match) continue;
     try {
+      if (auth.enabled && r.access !== "public") {
+        if (!user) return needLogin();
+        if (!atLeast(user.role, r.access)) {
+          const why = user.role === "viewer" ? "보기 전용 계정은 바꿀 수 없습니다." : "소유자만 할 수 있습니다.";
+          return sendJSON(res, 403, { error: why });
+        }
+      }
       const params = Object.fromEntries(r.keys.map((k, i) => [k, decodeURIComponent(match[i + 1])]));
       const body = method === "GET" ? {} : await readBody(req);
-      sendJSON(res, 200, await r.handler({ params, body }));
+      const result = await company.as(actorOf(user), () => r.handler({ params, body, user, req, res }));
+      sendJSON(res, 200, result);
     } catch (err) {
-      if (err instanceof EngineError) return sendJSON(res, err.status, { error: err.message });
+      if (err instanceof EngineError || err instanceof AuthError) return sendJSON(res, err.status, { error: err.message });
       console.error(err);
       sendJSON(res, 500, { error: "서버 오류가 발생했습니다." });
     }
@@ -197,6 +398,7 @@ server.listen(PORT, () => {
   console.log(`CompanyAI engine listening on http://localhost:${PORT}`);
   console.log(`  LLM provider: ${company.provider}${company.provider === "mock" ? " (set ANTHROPIC_API_KEY to use Claude)" : ""}`);
   console.log(`  Data file:    ${DATA_FILE}`);
+  console.log(`  Login:        ${auth.enabled ? `on (${auth.users().length} accounts)` : "off - create an owner account in the app to turn it on"}`);
 });
 
 async function shutdown() {

@@ -7,6 +7,7 @@ export default defineConfig({
   build: { outDir: "../dist", emptyOutDir: true },
   server: {
     port: 5173,
-    proxy: { "/api": { target: `http://localhost:${process.env.PORT ?? 8787}`, changeOrigin: true } },
+    // Keep the browser's Host so the server's same-site check sees the page's own origin.
+    proxy: { "/api": { target: `http://localhost:${process.env.PORT ?? 8787}`, changeOrigin: false } },
   },
 });

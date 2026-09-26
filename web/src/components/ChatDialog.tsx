@@ -84,7 +84,7 @@ export function ChatDialog({ agentId, state, onClose }: { agentId: string; state
             const streaming = m.from === "agent" && !m.endedAt;
             return (
               <div key={m.id} className={`utterance ${m.from === "user" ? "mine" : ""}`}>
-                {m.from === "user" ? <span className="avatar me">대</span> : <Avatar agent={agent} size={32} />}
+                {m.from === "user" ? <span className={`avatar me ${m.authorName ? "teammate" : ""}`}>{(m.authorName ?? "대").slice(0, 1)}</span> : <Avatar agent={agent} size={32} />}
                 <div className={`bubble ${m.error ? "failed" : ""}`}>
                   {m.from === "agent" ? (
                     m.content ? <Markdown text={m.content} /> : <p className="muted">생각하는 중…</p>
@@ -108,7 +108,7 @@ export function ChatDialog({ agentId, state, onClose }: { agentId: string; state
           <div ref={bottom} />
         </div>
 
-        <div className="composer-row">
+        <div className="composer-row needs-edit">
           <textarea
             rows={2}
             autoFocus

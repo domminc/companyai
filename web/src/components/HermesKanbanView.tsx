@@ -127,10 +127,10 @@ export function HermesKanbanView({ state }: { state: CompanyState }) {
                   </option>
                 ))}
               </select>
-              <button className="btn small" onClick={() => setNewBoard(true)}>
+              <button className="btn small needs-edit" onClick={() => setNewBoard(true)}>
                 + 보드
               </button>
-              <button className="btn primary" disabled={!slug} onClick={() => setCreating(true)}>
+              <button className="btn primary needs-edit" disabled={!slug} onClick={() => setCreating(true)}>
                 + 카드
               </button>
             </>
