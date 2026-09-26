@@ -43,18 +43,89 @@ export function taskPrompt(task: Task, sourceMeeting?: Meeting): string {
       sourceMeeting.decisions.length ? `Decisions:\n${sourceMeeting.decisions.map((d) => `- ${d}`).join("\n")}` : "",
     );
   }
+  if (task.acceptance) parts.push("", `Done means: ${task.acceptance}`);
+  const feedback = task.reviews.filter((r) => r.verdict === "changes").at(-1);
+  if (task.revision > 0 && feedback) {
+    parts.push(
+      "",
+      `Your previous version was sent back for changes (revision ${task.revision}).`,
+      `Reviewer feedback: ${feedback.comment || "(no comment)"}`,
+      task.previousOutput ? `Previous version:\n<previous>\n${task.previousOutput}\n</previous>` : "",
+      "Address every point of the feedback in a complete new version.",
+    );
+  }
   parts.push(
     "",
     "Produce the finished deliverable itself in Markdown - not a plan to produce it.",
     "End with a short 'Next steps' list if follow-up work is needed.",
   );
-  return parts.join("\n");
+  return parts.filter((p, i, all) => p !== "" || all[i - 1] !== "").join("\n");
+}
+
+/** Marker the review prompt starts with (also lets fake gateways recognise it). */
+export const REVIEW_MARKER = "📋 [Review:";
+
+export function reviewPrompt(task: Task, assigneeName: string): string {
+  return [
+    `${REVIEW_MARKER} ${task.title}]`,
+    `${assigneeName} finished this task and asks you to review it before it counts as done.`,
+    "",
+    "Task:",
+    task.description || "(no further description)",
+    task.acceptance ? `\nDone means: ${task.acceptance}` : "",
+    "",
+    "Submitted work:",
+    "<submission>",
+    task.output,
+    "</submission>",
+    "",
+    "Judge the submission against the task and its done-criteria, not against your own taste.",
+    "Answer on the FIRST line with exactly one of:",
+    "APPROVE",
+    "CHANGES: <what must change, concretely>",
+    "You may add a short justification on the following lines.",
+  ].join("\n");
+}
+
+/** Reads a review answer. Anything unclear goes to 대표 instead of being guessed. */
+export function parseVerdict(text: string): { verdict: "approved" | "changes" | "unclear"; comment: string } {
+  const lines = text
+    .split("\n")
+    .map((l) => l.replace(/[*_`]/g, "").replace(/^[\s>#-]+/, "").trim())
+    .filter(Boolean);
+  const first = lines[0] ?? "";
+  const rest = lines.slice(1).join("\n").trim();
+  if (/^APPROVE[DS]?\b/i.test(first)) return { verdict: "approved", comment: first.replace(/^APPROVE[DS]?\s*[:：-]?\s*/i, "") || rest };
+  const changes = first.match(/^(?:CHANGES|REQUEST[_ ]CHANGES|REJECT)\b\s*[:：-]?\s*(.*)$/i);
+  if (changes) return { verdict: "changes", comment: [changes[1], rest].filter(Boolean).join("\n") };
+  return { verdict: "unclear", comment: text.trim().slice(0, 500) };
+}
+
+export const CHAT_MARKER = "💬 [1:1 chat";
+
+export function chatPrompt(history: { from: "user" | "agent"; content: string }[], message: string, agentName: string): string {
+  const past = history
+    .slice(-20)
+    .map((m) => `[${m.from === "user" ? USER_DISPLAY_NAME : agentName}] ${m.content}`)
+    .join("\n\n");
+  return [
+    `${CHAT_MARKER} with ${USER_DISPLAY_NAME}]`,
+    `${USER_DISPLAY_NAME} runs the company and is talking to you directly.`,
+    past ? `Conversation so far:\n---\n${past}\n---` : "",
+    `${USER_DISPLAY_NAME}: ${message}`,
+    "",
+    "Reply as yourself, conversationally and concisely. If this is a request for real work, sketch the deliverable",
+    "and its done-criteria briefly; 대표 can register it as a task from this chat. Do not claim a task was created.",
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 export const SECRETARY_SYSTEM = [
   "You are the meeting secretary. You write accurate, concise minutes from a transcript.",
   "Only record decisions and action items that participants actually agreed on or volunteered for.",
-  "Each action item must be a self-contained task someone can execute without reading the transcript.",
+  "Each action item must be a self-contained task someone can execute without reading the transcript,",
+  "with concrete completion criteria. List an item after the items it depends on and reference them in `after`.",
   LANGUAGE_RULE,
 ].join("\n");
 
@@ -92,11 +163,17 @@ export function minutesSchema(participantIds: string[]) {
         items: {
           type: "object",
           additionalProperties: false,
-          required: ["title", "description", "assigneeId"],
+          required: ["title", "description", "acceptance", "assigneeId", "after"],
           properties: {
             title: { type: "string" },
             description: { type: "string" },
+            acceptance: { type: "string", description: "Concrete completion criteria" },
             assigneeId: { type: "string", enum: [...participantIds, ""] },
+            after: {
+              type: "array",
+              items: { type: "integer" },
+              description: "0-based indexes of EARLIER action items that must be finished before this one can start",
+            },
           },
         },
       },

@@ -20,6 +20,8 @@ export type LLMContext =
   | { kind: "task"; agentName: string; role: string; title: string }
   | { kind: "poll"; agentName: string; turnsTaken: number; remaining: number }
   | { kind: "meeting"; agentName: string; role: string; topic: string; opening: boolean; last: boolean; others: string[] }
+  | { kind: "review"; agentName: string; title: string; revision: number }
+  | { kind: "chat"; agentName: string; role: string; message: string }
   | { kind: "recruit"; jobDescription: string }
   | { kind: "minutes"; topic: string; participants: { id: string; name: string; role: string }[] };
 
@@ -161,10 +163,13 @@ export class MockLLM implements LLM {
       return {
         summary: `"${ctx.topic}"에 대해 ${ctx.participants.length}명이 논의했습니다. (mock 모드 요약)`,
         decisions: [`${ctx.topic} 관련 1차 실행안을 진행한다`],
-        actionItems: ctx.participants.map((p) => ({
+        actionItems: ctx.participants.map((p, i) => ({
           title: `${ctx.topic} - ${p.role} 관점 실행안 작성`,
           description: `회의 결정사항을 바탕으로 ${p.role} 관점의 구체적인 실행안을 작성합니다.`,
+          acceptance: `${p.role} 관점의 실행 항목 3개 이상과 일정이 포함될 것`,
           assigneeId: p.id,
+          // The first item comes first; the others build on it.
+          after: i === 0 ? [] : [0],
         })),
       } as T;
     }
@@ -188,6 +193,13 @@ function mockText(ctx: LLMContext): string {
         "",
         "*(mock 모드 응답입니다. ANTHROPIC_API_KEY를 설정하면 실제 Claude가 일합니다.)*",
       ].join("\n");
+    case "review":
+      // Send the first attempt back once, approve the revision.
+      return ctx.revision === 0
+        ? "CHANGES: 근거 자료와 수치를 한두 개 더 보강해 주세요.\n전체 방향은 좋습니다."
+        : "APPROVE\n피드백이 잘 반영됐습니다.";
+    case "chat":
+      return `${ctx.role} ${ctx.agentName}입니다. "${ctx.message.slice(0, 30)}" 관련해서는 먼저 목표와 기한을 정하고, 초안을 오늘 안에 공유드리겠습니다. 업무로 등록해 주시면 바로 시작할게요.`;
     case "poll":
       // Speak twice, then pass - enough to show floor control without an endless meeting.
       return ctx.turnsTaken < 2 && ctx.remaining > 0 ? `SPEAK: ${ctx.agentName} 관점에서 보탤 내용이 있습니다` : "PASS";

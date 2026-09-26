@@ -16,6 +16,9 @@ import {
 import {
   agentIdentity,
   CANDIDATE_SCHEMA,
+  chatPrompt,
+  parseVerdict,
+  reviewPrompt,
   minutesPrompt,
   minutesSchema,
   RECRUITER_SYSTEM,
@@ -29,6 +32,8 @@ import {
   type ActionItem,
   type Agent,
   type CandidateProfile,
+  type ChatMessage,
+  type ChatThread,
   type CompanyEvent,
   type CompanyState,
   type FloorVia,
@@ -39,6 +44,7 @@ import {
   type PollEntry,
   type SpeechEntry,
   type Task,
+  type TaskReview,
   USER_SPEAKER,
 } from "./types";
 
@@ -59,6 +65,21 @@ export interface CreateTaskInput {
   title: string;
   description?: string;
   assigneeId?: string | null;
+  /** Completion criteria. */
+  acceptance?: string;
+  /** Who signs off the result (default: nobody). */
+  review?: TaskReview;
+  /** Tasks that must be done before this one starts. */
+  dependsOn?: string[];
+}
+
+/** Edits the human makes to a meeting's draft action items before registering them. */
+export interface ActionItemEdit {
+  title?: string;
+  description?: string;
+  acceptance?: string;
+  assigneeId?: string | null;
+  include?: boolean;
 }
 
 export interface StartMeetingInput {
@@ -82,8 +103,12 @@ export interface CompanyOptions {
 interface Minutes {
   summary: string;
   decisions: string[];
-  actionItems: { title: string; description: string; assigneeId: string }[];
+  actionItems: { title: string; description: string; acceptance?: string; assigneeId: string; after?: number[] }[];
 }
+
+/** After this many rejected revisions an AI reviewer hands the task to 대표. */
+const MAX_AI_REVISIONS = 2;
+const MAX_CHAT_MESSAGES = 200;
 
 const END_REASON_TEXT: Record<MeetingEndReason, string> = {
   all_passed: "모두 PASS해서 회의를 마칩니다.",
@@ -109,6 +134,7 @@ function emptyState(): CompanyState {
     agents: [],
     tasks: [],
     meetings: [],
+    chats: [],
     activity: [],
   };
 }
@@ -348,11 +374,23 @@ export class Company {
     if (agent.status !== "idle") throw new EngineError(`${agent.name}님은 지금 일하는 중이라 내보낼 수 없습니다.`, 409);
     this.state.agents = this.state.agents.filter((a) => a.id !== agentId);
     for (const task of this.state.tasks) {
+      let changed = false;
       if (task.assigneeId === agentId && task.status === "todo") {
         task.assigneeId = null;
+        changed = true;
+      }
+      if (task.review.mode === "agent" && task.review.reviewerId === agentId) {
+        task.review = { mode: "human" };
+        changed = true;
+      }
+      if (changed) {
         task.updatedAt = now();
         this.emit({ type: "task.updated", task });
       }
+    }
+    if (this.state.chats.some((c) => c.agentId === agentId)) {
+      this.state.chats = this.state.chats.filter((c) => c.agentId !== agentId);
+      this.emit({ type: "chat.cleared", agentId });
     }
     for (const meeting of this.state.meetings) {
       if (meeting.status !== "scheduled" || !meeting.participantIds.includes(agentId)) continue;
@@ -372,35 +410,66 @@ export class Company {
   // ------------------------------------------------------------------ tasks
 
   createTask(input: CreateTaskInput & { sourceMeetingId?: string }): Task {
-    const title = input.title?.trim();
-    if (!title) throw new EngineError("업무 제목은 필수입니다.");
-    if (input.assigneeId) this.getAgent(input.assigneeId);
-    const task: Task = {
-      id: newId("tsk"),
-      title,
-      description: input.description?.trim() ?? "",
-      assigneeId: input.assigneeId || null,
-      status: "todo",
-      output: "",
-      sourceMeetingId: input.sourceMeetingId,
-      createdAt: now(),
-      updatedAt: now(),
-    };
-    this.state.tasks.push(task);
-    this.emit({ type: "task.updated", task });
+    const task = this.addTask(input);
     this.persist();
     this.dispatch();
     return task;
   }
 
-  updateTask(taskId: string, patch: { title?: string; description?: string; assigneeId?: string | null }): Task {
+  /** Records a task without starting anything (callers dispatch). */
+  private addTask(input: CreateTaskInput & { sourceMeetingId?: string }): Task {
+    const title = input.title?.trim();
+    if (!title) throw new EngineError("업무 제목은 필수입니다.");
+    if (input.assigneeId) this.getAgent(input.assigneeId);
+    const assigneeId = input.assigneeId || null;
+    const task: Task = {
+      id: newId("tsk"),
+      title,
+      description: input.description?.trim() ?? "",
+      assigneeId,
+      status: "todo",
+      output: "",
+      sourceMeetingId: input.sourceMeetingId,
+      acceptance: input.acceptance?.trim() || undefined,
+      dependsOn: [...new Set(input.dependsOn ?? [])].filter((id) => this.state.tasks.some((t) => t.id === id)),
+      review: this.checkReview(input.review, assigneeId),
+      revision: 0,
+      reviews: [],
+      createdAt: now(),
+      updatedAt: now(),
+    };
+    this.state.tasks.push(task);
+    this.emit({ type: "task.updated", task });
+    return task;
+  }
+
+  private checkReview(review: TaskReview | undefined, assigneeId: string | null): TaskReview {
+    if (!review || review.mode === "none") return { mode: "none" };
+    if (review.mode === "human") return { mode: "human" };
+    if (review.mode === "agent") {
+      if (!review.reviewerId) throw new EngineError("검토할 동료를 고르세요.");
+      this.getAgent(review.reviewerId);
+      if (review.reviewerId === assigneeId) throw new EngineError("담당자가 자기 업무를 검토할 수는 없습니다.");
+      return { mode: "agent", reviewerId: review.reviewerId };
+    }
+    throw new EngineError("알 수 없는 검토 방식입니다.");
+  }
+
+  updateTask(
+    taskId: string,
+    patch: { title?: string; description?: string; assigneeId?: string | null; acceptance?: string; review?: TaskReview },
+  ): Task {
     const task = this.getTask(taskId);
-    if (task.status === "in_progress") throw new EngineError("진행 중인 업무는 수정할 수 없습니다.", 409);
+    if (task.status === "in_progress" || task.reviewing) throw new EngineError("진행 중인 업무는 수정할 수 없습니다.", 409);
     if (patch.title?.trim()) task.title = patch.title.trim();
     if (patch.description !== undefined) task.description = patch.description.trim();
+    if (patch.acceptance !== undefined) task.acceptance = patch.acceptance.trim() || undefined;
     if (patch.assigneeId !== undefined) {
       if (patch.assigneeId) this.getAgent(patch.assigneeId);
       task.assigneeId = patch.assigneeId || null;
+    }
+    if (patch.review !== undefined || patch.assigneeId !== undefined) {
+      task.review = this.checkReview(patch.review ?? task.review, task.assigneeId);
     }
     task.updatedAt = now();
     this.emit({ type: "task.updated", task });
@@ -409,12 +478,13 @@ export class Company {
     return task;
   }
 
-  /** Put a finished or failed task back in the queue. */
+  /** Put a finished or failed task back in the queue, from scratch. */
   retryTask(taskId: string): Task {
     const task = this.getTask(taskId);
-    if (task.status === "in_progress") throw new EngineError("이미 진행 중입니다.", 409);
+    if (task.status === "in_progress" || task.reviewing) throw new EngineError("이미 진행 중입니다.", 409);
     task.status = "todo";
     task.output = "";
+    task.previousOutput = undefined;
     task.error = undefined;
     task.updatedAt = now();
     this.emit({ type: "task.updated", task });
@@ -425,10 +495,128 @@ export class Company {
 
   deleteTask(taskId: string) {
     const task = this.getTask(taskId);
-    if (task.status === "in_progress") throw new EngineError("진행 중인 업무는 삭제할 수 없습니다.", 409);
+    if (task.status === "in_progress" || task.reviewing) throw new EngineError("진행 중인 업무는 삭제할 수 없습니다.", 409);
     this.state.tasks = this.state.tasks.filter((t) => t.id !== taskId);
+    for (const other of this.state.tasks) {
+      if (!other.dependsOn.includes(taskId)) continue;
+      other.dependsOn = other.dependsOn.filter((id) => id !== taskId);
+      this.emit({ type: "task.updated", task: other });
+    }
     this.emit({ type: "task.deleted", taskId });
     this.persist();
+    this.dispatch();
+  }
+
+  /** 대표 signs off (or sends back) a task waiting in review. */
+  reviewTask(taskId: string, input: { approve: boolean; comment?: string }): Task {
+    const task = this.getTask(taskId);
+    if (task.status !== "review") throw new EngineError("검토를 기다리는 업무가 아닙니다.", 409);
+    if (task.reviewing) throw new EngineError("AI 동료가 검토하는 중입니다.", 409);
+    const comment = input.comment?.trim() ?? "";
+    if (!input.approve && !comment) throw new EngineError("무엇을 고쳐야 하는지 적어 주세요.");
+    this.applyVerdict(task, USER_SPEAKER, input.approve ? "approved" : "changes", comment);
+    return task;
+  }
+
+  private applyVerdict(task: Task, by: string, verdict: "approved" | "changes", comment: string) {
+    const who = speakerName(by, this.state);
+    task.reviews.push({ by, verdict, comment, revision: task.revision, at: now() });
+    if (verdict === "approved") {
+      task.status = "done";
+      const assignee = this.state.agents.find((a) => a.id === task.assigneeId);
+      if (assignee) {
+        assignee.stats.tasksDone += 1;
+        this.emit({ type: "agent.updated", agent: publicAgent(assignee) });
+      }
+      this.log(`${who}님이 "${task.title}"을(를) 승인했습니다.`);
+    } else {
+      task.previousOutput = task.output;
+      task.output = "";
+      task.revision += 1;
+      task.status = "todo";
+      this.log(`${who}님이 "${task.title}" 수정을 요청했습니다: ${comment}`);
+    }
+    task.updatedAt = now();
+    this.emit({ type: "task.updated", task });
+    this.persist();
+    this.dispatch();
+  }
+
+  /** Hands a task in review over to 대표, e.g. when an AI reviewer can't settle it. */
+  private escalate(task: Task, reason: string) {
+    task.review = { mode: "human" };
+    task.updatedAt = now();
+    this.log(reason);
+    this.emit({ type: "task.updated", task });
+  }
+
+  private depsDone(task: Task): boolean {
+    return task.dependsOn.every((id) => {
+      const dep = this.state.tasks.find((t) => t.id === id);
+      return !dep || dep.status === "done";
+    });
+  }
+
+  // ------------------------------------------------------------------- chat
+
+  /** 대표 says something to one employee; the reply streams in as chat events. */
+  chat(agentId: string, content: string): ChatThread {
+    const agent = this.getAgent(agentId);
+    const text = content?.trim();
+    if (!text) throw new EngineError("메시지를 입력하세요.");
+    let thread = this.state.chats.find((c) => c.agentId === agentId);
+    if (!thread) {
+      thread = { agentId, messages: [], replying: false };
+      this.state.chats.push(thread);
+    }
+    if (thread.replying) throw new EngineError(`${agent.name}님이 아직 답하는 중입니다.`, 409);
+    const history = thread.messages.filter((m) => !m.error).map(({ from, content }) => ({ from, content }));
+    thread.messages.push({ id: newId("msg"), from: "user", content: text, at: now() });
+    const reply: ChatMessage = { id: newId("msg"), from: "agent", content: "", at: now() };
+    thread.messages.push(reply);
+    if (thread.messages.length > MAX_CHAT_MESSAGES) thread.messages.splice(0, thread.messages.length - MAX_CHAT_MESSAGES);
+    thread.replying = true;
+    this.emit({ type: "chat.updated", thread });
+    this.persist();
+    this.track(this.runChat(agent, thread, reply, history, text));
+    return thread;
+  }
+
+  clearChat(agentId: string) {
+    const thread = this.state.chats.find((c) => c.agentId === agentId);
+    if (!thread) return;
+    if (thread.replying) throw new EngineError("답변이 끝난 뒤에 지울 수 있습니다.", 409);
+    this.state.chats = this.state.chats.filter((c) => c !== thread);
+    this.emit({ type: "chat.cleared", agentId });
+    this.persist();
+  }
+
+  private async runChat(agent: Agent, thread: ChatThread, reply: ChatMessage, history: { from: "user" | "agent"; content: string }[], text: string) {
+    try {
+      reply.content = await this.backendFor(agent).run(
+        {
+          identity: agentIdentity(agent),
+          instructions: workplaceContext(agent, this.state),
+          prompt: chatPrompt(history, text, agent.name),
+          effort: "medium",
+          context: { kind: "chat", agentName: agent.name, role: agent.role, message: text },
+        },
+        {
+          onDelta: (delta) => {
+            reply.content += delta;
+            this.emit({ type: "chat.delta", agentId: agent.id, messageId: reply.id, text: delta });
+          },
+        },
+      );
+    } catch (err) {
+      reply.content = `(답하지 못했습니다: ${describeError(err)})`;
+      reply.error = true;
+    } finally {
+      reply.endedAt = now();
+      thread.replying = false;
+      if (this.state.chats.includes(thread)) this.emit({ type: "chat.updated", thread });
+      this.persist();
+    }
   }
 
   // --------------------------------------------------------------- meetings
@@ -454,6 +642,7 @@ export class Company {
       decisions: [],
       actionItems: [],
       autoCreateTasks: input.createTasks !== false,
+      outcome: "none",
       createdAt: now(),
     };
     this.state.meetings.push(meeting);
@@ -485,6 +674,7 @@ export class Company {
     const participants = meeting.participantIds.map((id) => this.state.agents.find((a) => a.id === id)).filter((a): a is Agent => !!a);
     for (const agentId of findMentions(text, participants)) this.queueFloor(meeting, agentId, "user");
     this.userMessageSeq.set(meeting.id, (this.userMessageSeq.get(meeting.id) ?? 0) + 1);
+    meeting.userJoined = true;
     this.emit({ type: "meeting.updated", meeting });
     this.persist();
     return meeting;
@@ -510,6 +700,68 @@ export class Company {
   }
 
   /** Turn one action item of a finished meeting into a task (if not already). */
+  /** 대표 walks into (or out of) a running meeting. Speaking also joins. */
+  joinMeeting(meetingId: string, joined = true): Meeting {
+    const meeting = this.getMeeting(meetingId);
+    if (meeting.status !== "running") throw new EngineError("진행 중인 회의가 아닙니다.", 409);
+    meeting.userJoined = joined;
+    this.emit({ type: "meeting.updated", meeting });
+    this.persist();
+    return meeting;
+  }
+
+  /**
+   * Turns a meeting's draft action items into tasks, after 대표's edits. Items can be dropped
+   * (`include: false`); `after` links become task dependencies among the kept items.
+   */
+  registerOutcome(meetingId: string, input: { items?: (ActionItemEdit | null)[]; review?: TaskReview } = {}): Task[] {
+    const meeting = this.getMeeting(meetingId);
+    if (meeting.outcome !== "draft") throw new EngineError("등록할 회의 결과 초안이 없습니다.", 409);
+    input.items?.forEach((edit, i) => {
+      const item = meeting.actionItems[i];
+      if (!item || !edit) return;
+      if (edit.title !== undefined) item.title = edit.title.trim();
+      if (edit.description !== undefined) item.description = edit.description.trim();
+      if (edit.acceptance !== undefined) item.acceptance = edit.acceptance.trim();
+      if (edit.include !== undefined) item.include = edit.include;
+      if (edit.assigneeId !== undefined) {
+        if (edit.assigneeId) this.getAgent(edit.assigneeId);
+        item.assigneeId = edit.assigneeId || null;
+      }
+    });
+    if (input.review?.mode === "agent") this.checkReview(input.review, null);
+    return this.registerItems(meeting, input.review);
+  }
+
+  private registerItems(meeting: Meeting, review?: TaskReview): Task[] {
+    const created: (Task | undefined)[] = [];
+    meeting.actionItems.forEach((item, i) => {
+      if (!item.include || !item.title.trim()) return;
+      const assigneeId = item.assigneeId && this.state.agents.some((a) => a.id === item.assigneeId) ? item.assigneeId : null;
+      // Nobody reviews their own work: fall back to 대표 for that item.
+      const itemReview: TaskReview | undefined =
+        review?.mode === "agent" && review.reviewerId === assigneeId ? { mode: "human" } : review;
+      const task = this.addTask({
+        title: item.title,
+        description: item.description,
+        acceptance: item.acceptance,
+        assigneeId,
+        sourceMeetingId: meeting.id,
+        review: itemReview,
+        dependsOn: item.after.map((j) => created[j]?.id).filter((id): id is string => !!id),
+      });
+      item.taskId = task.id;
+      created[i] = task;
+    });
+    meeting.outcome = "registered";
+    const tasks = created.filter((t): t is Task => !!t);
+    this.log(`회의 "${meeting.topic}"의 결과를 업무 ${tasks.length}건으로 등록했습니다.`);
+    this.emit({ type: "meeting.updated", meeting });
+    this.persist();
+    this.dispatch();
+    return tasks;
+  }
+
   promoteActionItem(meetingId: string, index: number): Task {
     const meeting = this.getMeeting(meetingId);
     const item = meeting.actionItems[index];
@@ -546,7 +798,15 @@ export class Company {
     );
     for (const agent of this.state.agents) {
       if (agent.status !== "idle" || reserved.has(agent.id)) continue;
-      const next = this.state.tasks.find((t) => t.status === "todo" && t.assigneeId === agent.id);
+      // Reviewing a colleague's finished work comes before starting new work.
+      const review = this.state.tasks.find(
+        (t) => t.status === "review" && t.review.mode === "agent" && t.review.reviewerId === agent.id && !t.reviewing,
+      );
+      if (review) {
+        this.track(this.runReview(review, agent));
+        continue;
+      }
+      const next = this.state.tasks.find((t) => t.status === "todo" && t.assigneeId === agent.id && this.depsDone(t));
       if (next) this.track(this.runTask(next, agent));
     }
   }
@@ -604,9 +864,15 @@ export class Company {
         },
       );
       task.output = output;
-      task.status = "done";
-      agent.stats.tasksDone += 1;
-      this.log(`${agent.name}님이 "${task.title}" 업무를 완료했습니다.`);
+      if (task.review.mode === "none") {
+        task.status = "done";
+        agent.stats.tasksDone += 1;
+        this.log(`${agent.name}님이 "${task.title}" 업무를 완료했습니다.`);
+      } else {
+        task.status = "review";
+        const reviewer = task.review.mode === "human" ? USER_DISPLAY_NAME : speakerName(task.review.reviewerId!, this.state);
+        this.log(`${agent.name}님이 "${task.title}" 업무를 마치고 ${reviewer}님께 검토를 요청했습니다.`);
+      }
     } catch (err) {
       task.status = "failed";
       task.error = describeError(err);
@@ -617,6 +883,44 @@ export class Company {
       agent.status = "idle";
       this.emit({ type: "task.updated", task });
       this.emit({ type: "agent.updated", agent: publicAgent(agent) });
+      this.persist();
+      this.dispatch();
+    }
+  }
+
+  /** An AI colleague reviews finished work and approves it or sends it back. */
+  private async runReview(task: Task, reviewer: Agent) {
+    reviewer.status = "working";
+    task.reviewing = true;
+    this.emit({ type: "agent.updated", agent: publicAgent(reviewer) });
+    this.emit({ type: "task.updated", task });
+    this.log(`${reviewer.name}님이 "${task.title}" 검토를 시작했습니다.`);
+    const assignee = this.state.agents.find((a) => a.id === task.assigneeId);
+    try {
+      const answer = await this.backendFor(reviewer).run({
+        identity: agentIdentity(reviewer),
+        instructions: workplaceContext(reviewer, this.state),
+        prompt: reviewPrompt(task, assignee?.name ?? "A colleague"),
+        effort: "medium",
+        context: { kind: "review", agentName: reviewer.name, title: task.title, revision: task.revision },
+      });
+      task.reviewing = false;
+      const { verdict, comment } = parseVerdict(answer);
+      if (verdict === "unclear") {
+        this.escalate(task, `${reviewer.name}님의 검토 의견이 분명하지 않아 "${task.title}"을(를) ${USER_DISPLAY_NAME}님 검토로 넘깁니다.`);
+      } else if (verdict === "changes" && task.revision >= MAX_AI_REVISIONS) {
+        task.reviews.push({ by: reviewer.id, verdict, comment, revision: task.revision, at: now() });
+        this.escalate(task, `"${task.title}"이(가) ${task.revision + 1}번째도 반려되어 ${USER_DISPLAY_NAME}님 검토로 넘깁니다.`);
+      } else {
+        this.applyVerdict(task, reviewer.id, verdict, comment);
+      }
+    } catch (err) {
+      task.reviewing = false;
+      this.escalate(task, `${reviewer.name}님이 "${task.title}"을(를) 검토하지 못해 ${USER_DISPLAY_NAME}님 검토로 넘깁니다: ${describeError(err)}`);
+    } finally {
+      reviewer.status = "idle";
+      this.emit({ type: "agent.updated", agent: publicAgent(reviewer) });
+      this.emit({ type: "task.updated", task });
       this.persist();
       this.dispatch();
     }
@@ -698,11 +1002,16 @@ export class Company {
         const minutes = await this.writeMinutes(meeting, participants);
         meeting.summary = minutes.summary;
         meeting.decisions = minutes.decisions ?? [];
-        meeting.actionItems = (minutes.actionItems ?? []).map((a) => ({
+        meeting.actionItems = (minutes.actionItems ?? []).map((a, i) => ({
           title: a.title,
           description: a.description,
+          acceptance: a.acceptance ?? "",
           assigneeId: meeting.participantIds.includes(a.assigneeId) ? a.assigneeId : null,
+          // Only earlier items may be prerequisites, so there can be no cycles.
+          after: [...new Set(a.after ?? [])].filter((j) => Number.isInteger(j) && j >= 0 && j < i),
+          include: true,
         }));
+        meeting.outcome = meeting.actionItems.length ? "draft" : "none";
       } else {
         meeting.summary = "발언 없이 회의가 끝났습니다.";
       }
@@ -723,8 +1032,8 @@ export class Company {
         agent.status = "idle";
         this.emit({ type: "agent.updated", agent: publicAgent(agent) });
       }
-      if (meeting.status === "done" && meeting.autoCreateTasks) {
-        for (const item of meeting.actionItems) this.taskFromActionItem(meeting, item, false);
+      if (meeting.status === "done" && meeting.autoCreateTasks && meeting.outcome === "draft") {
+        this.registerItems(meeting);
       }
       this.emit({ type: "meeting.updated", meeting });
       this.persist();
@@ -859,6 +1168,7 @@ export class Company {
     const task = this.createTask({
       title: item.title,
       description: item.description,
+      acceptance: item.acceptance,
       assigneeId,
       sourceMeetingId: meeting.id,
     });
@@ -940,6 +1250,12 @@ export class Company {
 function recoverInterrupted(state: CompanyState): CompanyState {
   for (const agent of state.agents) agent.status = "idle";
   for (const task of state.tasks) {
+    // Fill fields added after the data was saved.
+    task.dependsOn ??= [];
+    task.review ??= { mode: "none" };
+    task.revision ??= 0;
+    task.reviews ??= [];
+    task.reviewing = false;
     task.activeTool = undefined;
     if (task.status === "in_progress") {
       task.status = "todo";
@@ -948,11 +1264,28 @@ function recoverInterrupted(state: CompanyState): CompanyState {
   }
   for (const meeting of state.meetings) {
     meeting.floorQueue ??= [];
+    for (const item of meeting.actionItems) {
+      item.acceptance ??= "";
+      item.after ??= [];
+      item.include ??= true;
+    }
+    meeting.outcome ??= meeting.actionItems.some((i) => i.taskId) ? "registered" : meeting.actionItems.length ? "draft" : "none";
     meeting.phase = undefined;
     meeting.currentSpeakerId = undefined;
     if (meeting.status === "running") {
       meeting.status = "failed";
       meeting.error = "서버가 재시작되어 회의가 중단되었습니다.";
+    }
+  }
+  state.chats ??= [];
+  for (const thread of state.chats) {
+    thread.replying = false;
+    for (const m of thread.messages) {
+      if (m.from === "agent" && !m.endedAt) {
+        m.endedAt = m.at;
+        m.error = true;
+        m.content ||= "(서버가 재시작되어 답변이 중단되었습니다)";
+      }
     }
   }
   return state;

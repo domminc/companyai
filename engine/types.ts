@@ -34,7 +34,29 @@ export interface HermesGateway {
   createdAt: string;
 }
 
-export type TaskStatus = "todo" | "in_progress" | "done" | "failed";
+export type TaskStatus = "todo" | "in_progress" | "review" | "done" | "failed";
+
+/**
+ * Who signs off a finished task: nobody, 대표 (the human), or another AI employee.
+ * With a reviewer, finished work goes to `review` instead of `done`.
+ */
+export type ReviewMode = "none" | "human" | "agent";
+
+export interface TaskReview {
+  mode: ReviewMode;
+  /** For mode "agent": the colleague who reviews. */
+  reviewerId?: string;
+}
+
+export interface ReviewRecord {
+  /** USER_SPEAKER or the reviewing agent's id. */
+  by: string;
+  verdict: "approved" | "changes";
+  comment: string;
+  /** The revision that was reviewed (0 = first attempt). */
+  revision: number;
+  at: string;
+}
 
 export interface Task {
   id: string;
@@ -48,6 +70,18 @@ export interface Task {
   activeTool?: string;
   /** Meeting that produced this task as an action item, if any. */
   sourceMeetingId?: string;
+  /** What "done" means; reviewers check against it. */
+  acceptance?: string;
+  /** Tasks that must be done before this one starts. */
+  dependsOn: string[];
+  review: TaskReview;
+  /** How many times the work was sent back for changes. */
+  revision: number;
+  reviews: ReviewRecord[];
+  /** The rejected output the agent is revising. */
+  previousOutput?: string;
+  /** An AI reviewer is looking at it right now. */
+  reviewing?: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -101,9 +135,18 @@ export type MeetingEntry = SpeechEntry | PollEntry | NoticeEntry;
 export interface ActionItem {
   title: string;
   description: string;
+  /** Completion criteria. */
+  acceptance: string;
   assigneeId: string | null;
+  /** Indexes of earlier items that must finish first. */
+  after: number[];
+  /** Kept when the draft is registered (the human can drop items). */
+  include: boolean;
   taskId?: string;
 }
+
+/** Meeting results: none yet, a draft awaiting review, or registered as tasks. */
+export type MeetingOutcome = "none" | "draft" | "registered";
 
 export interface Meeting {
   id: string;
@@ -127,8 +170,11 @@ export interface Meeting {
   summary: string;
   decisions: string[];
   actionItems: ActionItem[];
-  /** Turn action items into tasks as soon as the meeting ends. */
+  /** Turn action items into tasks as soon as the meeting ends (otherwise they wait as a draft). */
   autoCreateTasks: boolean;
+  outcome: MeetingOutcome;
+  /** 대표 is in the room (joined, or spoke). */
+  userJoined?: boolean;
   error?: string;
   createdAt: string;
   endedAt?: string;
@@ -141,6 +187,23 @@ export interface ActivityEntry {
   message: string;
 }
 
+export interface ChatMessage {
+  id: string;
+  from: "user" | "agent";
+  content: string;
+  at: string;
+  /** Set once an agent reply has finished streaming. */
+  endedAt?: string;
+  error?: boolean;
+}
+
+/** A 1:1 conversation between 대표 and one employee. */
+export interface ChatThread {
+  agentId: string;
+  messages: ChatMessage[];
+  replying: boolean;
+}
+
 export interface CompanyState {
   name: string;
   mission: string;
@@ -149,6 +212,7 @@ export interface CompanyState {
   agents: Agent[];
   tasks: Task[];
   meetings: Meeting[];
+  chats: ChatThread[];
   activity: ActivityEntry[];
 }
 
@@ -162,6 +226,9 @@ export type CompanyEvent =
   | { type: "task.deleted"; taskId: string }
   | { type: "meeting.updated"; meeting: Meeting }
   | { type: "meeting.delta"; meetingId: string; entryId: string; text: string }
+  | { type: "chat.updated"; thread: ChatThread }
+  | { type: "chat.delta"; agentId: string; messageId: string; text: string }
+  | { type: "chat.cleared"; agentId: string }
   | { type: "company.updated"; name: string; mission: string; defaultModel: string }
   | { type: "activity"; entry: ActivityEntry };
 

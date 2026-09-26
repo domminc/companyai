@@ -46,6 +46,12 @@ export function defaultFakeReply(): (req: FakeRunRequest) => FakeReply {
       polls.set(req.profile, n);
       return n <= 2 ? `SPEAK: ${req.profile} 프로필 관점을 보태고 싶습니다` : "PASS";
     }
+    if (req.input.startsWith("📋 [Review:")) {
+      return "APPROVE\n요청 사항과 완료 조건을 충족합니다.";
+    }
+    if (req.input.startsWith("💬 [1:1 chat")) {
+      return `(Hermes ${req.profile}) 네, 확인했습니다. 필요한 자료를 도구로 찾아보고 정리해서 말씀드릴게요.`;
+    }
     if (req.input.startsWith("📋 [Meeting:")) {
       return `(Hermes ${req.profile}) 실제 도구로 확인해 보니 일정상 2주가 적당합니다. 제가 조사 결과를 정리해 공유하겠습니다.`;
     }

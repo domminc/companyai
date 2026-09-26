@@ -49,6 +49,8 @@ export class ClaudeBackend implements AgentBackend {
 /** A hung gateway must not stall a meeting forever. */
 const HERMES_TIMEOUT_MS: Record<LLMContext["kind"], number> = {
   poll: 2 * 60_000,
+  review: 5 * 60_000,
+  chat: 5 * 60_000,
   meeting: 5 * 60_000,
   minutes: 5 * 60_000,
   recruit: 5 * 60_000,
