@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { type Agent, type AgentTool, api, type CandidateProfile, type CompanyState, type ModelOption } from "../api";
+import { AutomationsDialog } from "./AutomationsDialog";
 import { ChatDialog } from "./ChatDialog";
 import { Avatar, ErrorText, Modal, StatusBadge, useAction } from "./common";
 
@@ -7,6 +8,7 @@ export function TeamView({ state, models }: { state: CompanyState; models: Model
   const [hiring, setHiring] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
   const [chatWith, setChatWith] = useState<string | null>(null);
+  const [automating, setAutomating] = useState<string | null>(null);
   const agent = state.agents.find((a) => a.id === selected);
 
   return (
@@ -46,7 +48,13 @@ export function TeamView({ state, models }: { state: CompanyState; models: Model
                 </div>
                 <RuntimeBadge agent={a} state={state} models={models} />
                 <p className="agent-now">
-                  {current ? `▶ ${current.title}` : a.status === "in_meeting" ? "회의에 참석 중" : "다음 일을 기다리는 중"}
+                  {current
+                    ? `▶ ${current.title}`
+                    : a.status === "in_meeting"
+                      ? "회의에 참석 중"
+                      : a.external
+                        ? `${a.external.kind === "kanban" ? "📋" : "⏰"} ${a.external.title}`
+                        : "다음 일을 기다리는 중"}
                 </p>
                 {a.skills.length > 0 && (
                   <div className="chips">
@@ -79,9 +87,14 @@ export function TeamView({ state, models }: { state: CompanyState; models: Model
             setSelected(null);
             setChatWith(agent.id);
           }}
+          onAutomations={() => {
+            setSelected(null);
+            setAutomating(agent.id);
+          }}
         />
       )}
       {chatWith && <ChatDialog agentId={chatWith} state={state} onClose={() => setChatWith(null)} />}
+      {automating && <AutomationsDialog agentId={automating} state={state} onClose={() => setAutomating(null)} />}
     </section>
   );
 }
@@ -315,12 +328,14 @@ function AgentDialog({
   models,
   onClose,
   onChat,
+  onAutomations,
 }: {
   agent: Agent;
   state: CompanyState;
   models: ModelOption[];
   onClose: () => void;
   onChat: () => void;
+  onAutomations: () => void;
 }) {
   const [draft, setDraft] = useState({
     ...agent,
@@ -361,6 +376,11 @@ function AgentDialog({
           <button type="button" className="btn small" onClick={onChat}>
             💬 대화하기
           </button>
+          {agent.runtime.kind === "hermes" && (
+            <button type="button" className="btn small" onClick={onAutomations}>
+              ⏰ 자동화
+            </button>
+          )}
         </div>
         <div className="grid-2">
           <label>

@@ -11,6 +11,13 @@ export type AgentTool = "web" | "code";
 
 export const AGENT_TOOLS: AgentTool[] = ["web", "code"];
 
+export interface ExternalWork {
+  kind: "kanban" | "cron";
+  title: string;
+  /** Kanban board slug. */
+  board?: string;
+}
+
 export type AgentRuntime =
   | { kind: "claude"; model: string; tools?: AgentTool[] }
   | { kind: "hermes"; gatewayId: string; profile: string; profileKey?: string; hasProfileKey?: boolean };
@@ -24,6 +31,8 @@ export interface Agent {
   skills: string[];
   runtime: AgentRuntime;
   status: AgentStatus;
+  /** Work a Hermes employee is doing on the gateway itself (a kanban card, a cron job). */
+  external?: ExternalWork;
   hiredAt: string;
   stats: { tasksDone: number; meetingsAttended: number };
 }

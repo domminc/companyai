@@ -2,10 +2,11 @@ import { useEffect, useRef, useState } from "react";
 import { api, type CompanyState, type ModelOption } from "../api";
 import { type CameraView, OfficeScene, webglAvailable } from "../office/scene";
 import { Avatar, ErrorText, StatusBadge, useAction } from "./common";
+import { AutomationsDialog } from "./AutomationsDialog";
 import { ChatDialog } from "./ChatDialog";
 import { RuntimeBadge } from "./TeamView";
 
-type Tab = "office" | "team" | "tasks" | "meetings";
+type Tab = "office" | "team" | "tasks" | "meetings" | "hermes";
 
 export function OfficeView({
   state,
@@ -65,9 +66,10 @@ export function OfficeView({
   };
 
   const meeting = state.meetings.find((m) => m.status === "running");
-  const working = state.agents.filter((a) => a.status === "working").length;
+  const working = state.agents.filter((a) => a.status === "working" || (a.status === "idle" && a.external)).length;
   const agent = state.agents.find((a) => a.id === selected);
   const [chatWith, setChatWith] = useState<string | null>(null);
+  const [automating, setAutomating] = useState<string | null>(null);
   const reviewsForMe = state.tasks.filter((t) => t.status === "review" && t.review.mode === "human" && !t.reviewing).length;
   const speaker = meeting?.currentSpeakerId ? state.agents.find((a) => a.id === meeting.currentSpeakerId) : undefined;
 
@@ -143,9 +145,11 @@ export function OfficeView({
             onClose={() => setSelected(null)}
             onNavigate={onNavigate}
             onChat={() => setChatWith(agent.id)}
+            onAutomations={() => setAutomating(agent.id)}
           />
         )}
         {chatWith && <ChatDialog agentId={chatWith} state={state} onClose={() => setChatWith(null)} />}
+        {automating && <AutomationsDialog agentId={automating} state={state} onClose={() => setAutomating(null)} />}
       </div>
     </section>
   );
@@ -158,6 +162,7 @@ function AgentPanel({
   onClose,
   onNavigate,
   onChat,
+  onAutomations,
 }: {
   agentId: string;
   state: CompanyState;
@@ -165,6 +170,7 @@ function AgentPanel({
   onClose: () => void;
   onNavigate: (tab: Tab) => void;
   onChat: () => void;
+  onAutomations: () => void;
 }) {
   const agent = state.agents.find((a) => a.id === agentId)!;
   const [title, setTitle] = useState("");
@@ -199,6 +205,14 @@ function AgentPanel({
           <p className="task-preview">{current.output.slice(-160) || "생각하는 중…"}</p>
         </div>
       )}
+      {agent.external && (
+        <button className="panel-block linkish" onClick={() => onNavigate("hermes")} disabled={agent.external.kind !== "kanban"}>
+          <span className="muted small">{agent.external.kind === "kanban" ? "Hermes 칸반에서 하는 일" : "자동화 실행 중"}</span>
+          <strong>
+            {agent.external.kind === "kanban" ? "📋" : "⏰"} {agent.external.title}
+          </strong>
+        </button>
+      )}
       {meeting && (
         <button className="btn small" onClick={() => onNavigate("meetings")}>
           🗣 회의 "{meeting.topic}" 보기
@@ -228,6 +242,11 @@ function AgentPanel({
             <button type="button" className="btn small" onClick={onChat}>
               💬 대화
             </button>
+            {agent.runtime.kind === "hermes" && (
+              <button type="button" className="btn small" onClick={onAutomations}>
+                ⏰ 자동화
+              </button>
+            )}
           </div>
           <button className="btn primary small" disabled={!title.trim() || create.busy}>
             지시하기

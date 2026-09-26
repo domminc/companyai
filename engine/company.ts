@@ -1,6 +1,20 @@
 import { randomUUID } from "node:crypto";
 import { type AgentBackend, ClaudeBackend, HermesBackend } from "./backends";
-import { HermesClient } from "./hermes";
+import { describeHermesError, HermesClient, HermesError } from "./hermes";
+import {
+  type HermesJob,
+  type HermesJobRun,
+  HermesJobs,
+  HermesKanban,
+  type JobInput,
+  type JobsSource,
+  KANBAN_ACTIONS,
+  type KanbanAction,
+  type KanbanBoard,
+  type KanbanBoardMeta,
+  type KanbanCard,
+  type KanbanCardDetail,
+} from "./hermes-ops";
 import { DEFAULT_MODEL, describeError, type LLM } from "./llm";
 import {
   findMentions,
@@ -188,6 +202,12 @@ export class Company {
   private saveQueued = false;
   /** Bumped whenever the human speaks in a meeting, so an all-PASS poll can be re-run. */
   private userMessageSeq = new Map<string, number>();
+  /** Which cron API each Hermes employee's gateway speaks, once known. */
+  private jobSources = new Map<string, JobsSource>();
+  /** Kanban cards that were running at the last sync, per gateway, to notice when they finish. */
+  private runningCards = new Map<string, Map<string, { title: string; assignee: string }>>();
+  private syncRunning?: Promise<void>;
+  private syncQueued?: Promise<void>;
 
   private constructor(
     private llm: LLM,
@@ -297,6 +317,268 @@ export class Company {
 
   private emitGateways() {
     this.emit({ type: "gateways.updated", gateways: this.state.gateways.map(publicGateway) });
+  }
+
+  // ------------------------------------------------ Hermes automations (cron)
+
+  private hermesAgent(agentId: string): Agent & { runtime: { kind: "hermes" } } {
+    const agent = this.getAgent(agentId);
+    if (agent.runtime.kind !== "hermes") throw new EngineError("자동화는 Hermes 직원에게만 걸 수 있습니다.", 400);
+    return agent as Agent & { runtime: { kind: "hermes" } };
+  }
+
+  private jobsFor(agent: Agent & { runtime: { kind: "hermes" } }): HermesJobs {
+    const gateway = this.getGateway(agent.runtime.gatewayId);
+    const client = new HermesClient({
+      baseUrl: gateway.url,
+      token: agent.runtime.profileKey || gateway.apiKey,
+      profile: agent.runtime.profile,
+      fetchImpl: this.hermesFetch,
+    });
+    return new HermesJobs(client, agent.runtime.profile, this.jobSources.get(agent.id));
+  }
+
+  /** Runs a gateway call, remembering what it learned and turning Hermes errors into user-facing ones. */
+  private async viaHermes<T>(what: string, fn: () => Promise<T>): Promise<T> {
+    try {
+      return await fn();
+    } catch (err) {
+      if (err instanceof EngineError) throw err;
+      if (err instanceof HermesError) {
+        const status = err.code === "unreachable" ? 502 : err.status >= 400 && err.status < 500 ? err.status : 502;
+        throw new EngineError(`${what} 실패: ${describeHermesError(err)}`, status);
+      }
+      throw new EngineError(`${what} 실패: ${describeError(err)}`, 502);
+    }
+  }
+
+  async listAutomations(agentId: string): Promise<{ source: JobsSource; jobs: HermesJob[] }> {
+    const agent = this.hermesAgent(agentId);
+    const jobs = this.jobsFor(agent);
+    const list = await this.viaHermes("자동화 목록 조회", () => jobs.list());
+    this.jobSources.set(agent.id, jobs.source!);
+    return { source: jobs.source!, jobs: list };
+  }
+
+  async createAutomation(agentId: string, input: JobInput): Promise<HermesJob> {
+    const agent = this.hermesAgent(agentId);
+    const name = input.name?.trim();
+    const schedule = input.schedule?.trim();
+    const prompt = input.prompt?.trim();
+    if (!name || !schedule || !prompt) throw new EngineError("이름, 일정, 지시 내용은 필수입니다.");
+    const job = await this.viaHermes("자동화 만들기", () => this.jobsFor(agent).create({ name, schedule, prompt }));
+    this.log(`${agent.name}님에게 자동화 "${job.name}"(${job.schedule || schedule})을(를) 걸었습니다.`);
+    this.persist();
+    return job;
+  }
+
+  async updateAutomation(agentId: string, jobId: string, patch: Partial<JobInput>): Promise<HermesJob> {
+    const agent = this.hermesAgent(agentId);
+    const clean: Partial<JobInput> = {};
+    for (const key of ["name", "schedule", "prompt"] as const) if (patch[key]?.trim()) clean[key] = patch[key]!.trim();
+    return this.viaHermes("자동화 수정", () => this.jobsFor(agent).update(jobId, clean));
+  }
+
+  async automationAction(agentId: string, jobId: string, action: "pause" | "resume" | "run" | "delete"): Promise<void> {
+    const agent = this.hermesAgent(agentId);
+    if (!["pause", "resume", "run", "delete"].includes(action)) throw new EngineError(`알 수 없는 동작: ${action}`);
+    const jobs = this.jobsFor(agent);
+    await this.viaHermes("자동화 제어", () => (action === "delete" ? jobs.remove(jobId) : jobs.act(jobId, action)));
+    if (action === "run") {
+      this.log(`${agent.name}님이 자동화를 지금 실행합니다.`);
+      void this.syncHermesWork();
+    }
+  }
+
+  automationRuns(agentId: string, jobId: string): Promise<HermesJobRun[]> {
+    const agent = this.hermesAgent(agentId);
+    return this.viaHermes("실행 기록 조회", () => this.jobsFor(agent).runs(jobId));
+  }
+
+  // ----------------------------------------------------------- Hermes kanban
+
+  private kanbanFor(gatewayId: string): HermesKanban {
+    const gateway = this.getGateway(gatewayId);
+    return new HermesKanban(new HermesClient({ baseUrl: gateway.url, token: gateway.apiKey, fetchImpl: this.hermesFetch }));
+  }
+
+  /** Whether the gateway has the DeskRPG plugin, and its boards. */
+  async kanbanOverview(gatewayId: string): Promise<{ plugin: boolean; version?: string; boards: KanbanBoardMeta[]; current?: string }> {
+    const kanban = this.kanbanFor(gatewayId);
+    return this.viaHermes("칸반 조회", async () => {
+      const info = await kanban.info();
+      if (!info) return { plugin: false, boards: [] };
+      const { boards, current } = await kanban.boards();
+      return { plugin: true, version: typeof info.version === "string" ? info.version : undefined, boards: boards.filter((b) => !b.archived), current };
+    });
+  }
+
+  kanbanBoard(gatewayId: string, slug: string): Promise<KanbanBoard> {
+    return this.viaHermes("칸반 보드 조회", () => this.kanbanFor(gatewayId).board(slug));
+  }
+
+  async kanbanCreateBoard(gatewayId: string, input: { slug: string; name?: string }) {
+    const slug = input.slug?.trim().toLowerCase();
+    if (!slug || !/^[a-z0-9][a-z0-9-]*$/.test(slug)) throw new EngineError("보드 ID는 영문 소문자·숫자·-만 쓸 수 있습니다.");
+    await this.viaHermes("칸반 보드 만들기", () => this.kanbanFor(gatewayId).createBoard(slug, input.name?.trim() || slug));
+    this.log(`Hermes 칸반 보드 "${input.name?.trim() || slug}"를 만들었습니다.`);
+    return { ok: true };
+  }
+
+  async kanbanCreateCard(
+    gatewayId: string,
+    slug: string,
+    input: { title: string; body?: string; assigneeId?: string; assignee?: string; priority?: number; triage?: boolean },
+  ): Promise<KanbanCard> {
+    const title = input.title?.trim();
+    if (!title) throw new EngineError("카드 제목은 필수입니다.");
+    let assignee = input.assignee?.trim() || undefined;
+    let owner: Agent | undefined;
+    if (input.assigneeId) {
+      owner = this.getAgent(input.assigneeId);
+      if (owner.runtime.kind !== "hermes" || owner.runtime.gatewayId !== gatewayId) {
+        throw new EngineError(`${owner.name}님은 이 게이트웨이의 Hermes 직원이 아닙니다.`, 400);
+      }
+      assignee = owner.runtime.profile;
+    }
+    const card = await this.viaHermes("칸반 카드 만들기", () =>
+      this.kanbanFor(gatewayId).createCard(slug, { title, body: input.body?.trim(), assignee, priority: input.priority, triage: input.triage }),
+    );
+    this.log(`Hermes 칸반에 "${title}" 카드를 올렸습니다${owner ? ` (담당 ${owner.name})` : assignee ? ` (담당 프로필 ${assignee})` : ""}.`);
+    this.persist();
+    void this.syncHermesWork();
+    return card;
+  }
+
+  kanbanCard(gatewayId: string, slug: string, cardId: string): Promise<KanbanCardDetail> {
+    return this.viaHermes("칸반 카드 조회", () => this.kanbanFor(gatewayId).card(slug, cardId));
+  }
+
+  async kanbanComment(gatewayId: string, slug: string, cardId: string, text: string, author = USER_DISPLAY_NAME) {
+    if (!text?.trim()) throw new EngineError("댓글 내용을 입력하세요.");
+    await this.viaHermes("댓글 달기", () => this.kanbanFor(gatewayId).comment(slug, cardId, text.trim(), author));
+    return { ok: true };
+  }
+
+  async kanbanAction(gatewayId: string, slug: string, cardId: string, action: KanbanAction, body: Record<string, unknown> = {}) {
+    if (!KANBAN_ACTIONS.includes(action)) throw new EngineError(`알 수 없는 카드 동작: ${action}`);
+    if (action === "reassign" && typeof body.agentId === "string") {
+      const agent = this.getAgent(body.agentId);
+      if (agent.runtime.kind !== "hermes" || agent.runtime.gatewayId !== gatewayId) throw new EngineError(`${agent.name}님은 이 게이트웨이의 Hermes 직원이 아닙니다.`);
+      body = { profile: agent.runtime.profile, reclaim_first: body.reclaim_first === true };
+    }
+    const result = await this.viaHermes("카드 동작", () => this.kanbanFor(gatewayId).act(slug, cardId, action, body));
+    void this.syncHermesWork();
+    return result;
+  }
+
+  async kanbanDeleteCard(gatewayId: string, slug: string, cardId: string) {
+    await this.viaHermes("카드 삭제", () => this.kanbanFor(gatewayId).remove(slug, cardId));
+    return { ok: true };
+  }
+
+  /**
+   * Looks at what Hermes employees are doing on their gateways - running kanban cards and
+   * running cron jobs - so the office can show it. Best effort: an unreachable gateway or one
+   * without the plugin just shows nothing.
+   */
+  syncHermesWork(): Promise<void> {
+    // One sync at a time; a request during one gets a single follow-up sync that sees its change.
+    if (this.syncQueued) return this.syncQueued;
+    if (this.syncRunning) {
+      this.syncQueued = this.syncRunning.then(() => {
+        this.syncQueued = undefined;
+        return this.syncHermesWork();
+      });
+      return this.syncQueued;
+    }
+    this.syncRunning = this.doSyncHermesWork().finally(() => {
+      this.syncRunning = undefined;
+    });
+    return this.syncRunning;
+  }
+
+  private async doSyncHermesWork(): Promise<void> {
+    const hermesAgents = this.state.agents.filter((a) => a.runtime.kind === "hermes") as (Agent & { runtime: { kind: "hermes" } })[];
+    const found = new Map<string, NonNullable<Agent["external"]>>();
+    for (const gateway of this.state.gateways) {
+      const staff = hermesAgents.filter((a) => a.runtime.gatewayId === gateway.id);
+      if (!staff.length) continue;
+      const byProfile = new Map(staff.map((a) => [a.runtime.profile, a]));
+      const running = new Map<string, { title: string; assignee: string }>();
+      const statuses = new Map<string, string>();
+      try {
+        const kanban = this.kanbanFor(gateway.id);
+        if (await kanban.info()) {
+          const { boards } = await kanban.boards();
+          for (const meta of boards.filter((b) => !b.archived).slice(0, 8)) {
+            const board = await kanban.board(meta.slug);
+            for (const column of board.columns) {
+              for (const card of column.tasks) {
+                statuses.set(`${meta.slug}/${card.id}`, card.status || column.name);
+                if (card.status !== "running" && column.name !== "running") continue;
+                const agent = card.assignee ? byProfile.get(card.assignee) : undefined;
+                running.set(`${meta.slug}/${card.id}`, { title: card.title, assignee: card.assignee ?? "" });
+                if (agent && !found.has(agent.id)) found.set(agent.id, { kind: "kanban", title: card.title, board: meta.slug });
+              }
+            }
+          }
+          this.noticeFinishedCards(gateway.id, running, statuses, byProfile);
+        }
+      } catch {
+        // gateway down or plugin missing: nothing to show
+      }
+      for (const agent of staff) {
+        if (found.has(agent.id)) continue;
+        try {
+          const jobs = this.jobsFor(agent);
+          const job = (await jobs.list()).find((j) => j.state === "running");
+          this.jobSources.set(agent.id, jobs.source!);
+          if (job) found.set(agent.id, { kind: "cron", title: job.name });
+        } catch {
+          // ignore
+        }
+      }
+    }
+    for (const agent of this.state.agents) {
+      const next = found.get(agent.id);
+      if (JSON.stringify(next) === JSON.stringify(agent.external)) continue;
+      agent.external = next;
+      this.emit({ type: "agent.updated", agent: publicAgent(agent) });
+    }
+  }
+
+  private noticeFinishedCards(
+    gatewayId: string,
+    running: Map<string, { title: string; assignee: string }>,
+    statuses: Map<string, string>,
+    byProfile: Map<string, Agent>,
+  ) {
+    const before = this.runningCards.get(gatewayId);
+    this.runningCards.set(gatewayId, running);
+    if (!before) return;
+    for (const [key, card] of before) {
+      const agent = byProfile.get(card.assignee);
+      if (running.has(key) || !agent) continue;
+      const status = statuses.get(key);
+      const what =
+        status === "done"
+          ? "작업을 마쳤습니다"
+          : status === "review"
+            ? "작업을 마치고 검토를 기다립니다"
+            : status === "blocked"
+              ? "작업이 막혔습니다"
+              : "작업을 멈췄습니다";
+      this.log(`${agent.name}님이 Hermes 칸반 카드 "${card.title}" ${what}.`, status === "blocked" ? "error" : "info");
+    }
+  }
+
+  /** Polls Hermes work in the background; returns a stop function. */
+  startHermesSync(intervalMs = 15_000): () => void {
+    const timer = setInterval(() => void this.syncHermesWork(), intervalMs);
+    timer.unref?.();
+    void this.syncHermesWork();
+    return () => clearInterval(timer);
   }
 
   // ----------------------------------------------------------------- hiring
@@ -1261,7 +1543,10 @@ export class Company {
 
 /** Work that was running when the process stopped cannot be resumed mid-stream. */
 function recoverInterrupted(state: CompanyState): CompanyState {
-  for (const agent of state.agents) agent.status = "idle";
+  for (const agent of state.agents) {
+    agent.status = "idle";
+    agent.external = undefined;
+  }
   for (const task of state.tasks) {
     // Fill fields added after the data was saved.
     task.dependsOn ??= [];

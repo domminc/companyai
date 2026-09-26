@@ -66,7 +66,7 @@ export function planGoals(state: CompanyState, layout: OfficeLayout, errands: Ma
       goals.set(agent.id, { key: `report:${errand.since}`, spot: { ...r, x: r.x + offset }, pose: "stand", activity: "report" });
       continue;
     }
-    if (errand?.kind === "break" && agent.status === "idle") {
+    if (errand?.kind === "break" && agent.status === "idle" && !agent.external) {
       const spot = layout.lounge.spots[errand.spot % layout.lounge.spots.length];
       goals.set(agent.id, { key: `break:${errand.spot}`, spot, pose: "stand", activity: "break" });
       continue;
@@ -77,7 +77,8 @@ export function planGoals(state: CompanyState, layout: OfficeLayout, errands: Ma
       key: `desk:${desks.get(agent.id)}`,
       spot: desk.seat,
       pose: "sit",
-      activity: agent.status === "working" ? "work" : "idle",
+      // Hermes-side work (a kanban card, a cron job) is still work at the desk.
+      activity: agent.status === "working" || agent.external ? "work" : "idle",
     });
   }
   return goals;
@@ -166,7 +167,10 @@ export function planOverlays(state: CompanyState, errands: Map<string, Errand>):
     } else if (agent.status === "working") {
       const task = state.tasks.find((t) => t.assigneeId === agent.id && t.status === "in_progress");
       overlay.typing = true;
-      if (task) overlay.bubble = { text: task.activeTool ? `🔧 ${task.activeTool}` : `💻 ${clip(task.title, 14)}`, tone: "work" };
+      if (task) overlay.bubble = { text: task.activeTool ? `🔧 ${clip(task.activeTool, 40)}` : `💻 ${clip(task.title, 14)}`, tone: "work" };
+    } else if (agent.external) {
+      overlay.typing = true;
+      overlay.bubble = { text: `${agent.external.kind === "kanban" ? "📋" : "⏰"} ${clip(agent.external.title, 16)}`, tone: "work" };
     }
     agents.set(agent.id, overlay);
   }

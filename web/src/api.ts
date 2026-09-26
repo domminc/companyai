@@ -13,6 +13,19 @@ import type {
   TaskReview,
 } from "../../engine/types";
 import type { ActionItemEdit } from "../../engine/company";
+import type {
+  HermesJob,
+  HermesJobRun,
+  JobInput,
+  JobsSource,
+  KanbanAction,
+  KanbanBoard,
+  KanbanBoardMeta,
+  KanbanCard,
+  KanbanCardDetail,
+} from "../../engine/hermes-ops";
+
+export type { HermesJob, HermesJobRun, JobInput, KanbanAction, KanbanBoard, KanbanBoardMeta, KanbanCard, KanbanCardDetail };
 
 export type { ActionItemEdit, Agent, AgentTool, CandidateProfile, ChatMessage, ChatThread, CompanyState, HermesGateway, Meeting, MeetingEntry, Task, TaskReview };
 export { USER_SPEAKER } from "../../engine/types";
@@ -85,4 +98,36 @@ export const api = {
     request<Task[]>("POST", `/meetings/${id}/outcome`, input),
   cancelMeeting: (id: string) => request<Meeting>("POST", `/meetings/${id}/cancel`),
   promoteActionItem: (id: string, index: number) => request<Task>("POST", `/meetings/${id}/action-items/${index}/promote`),
+
+  automations: (agentId: string) => request<{ source: JobsSource; jobs: HermesJob[] }>("GET", `/agents/${agentId}/automations`),
+  createAutomation: (agentId: string, input: JobInput) => request<HermesJob>("POST", `/agents/${agentId}/automations`, input),
+  updateAutomation: (agentId: string, jobId: string, patch: Partial<JobInput>) =>
+    request<HermesJob>("PATCH", `/agents/${agentId}/automations/${enc(jobId)}`, patch),
+  automationAction: (agentId: string, jobId: string, action: "pause" | "resume" | "run") =>
+    request<{ ok: true }>("POST", `/agents/${agentId}/automations/${enc(jobId)}/${action}`),
+  deleteAutomation: (agentId: string, jobId: string) => request<{ ok: true }>("DELETE", `/agents/${agentId}/automations/${enc(jobId)}`),
+  automationRuns: (agentId: string, jobId: string) => request<HermesJobRun[]>("GET", `/agents/${agentId}/automations/${enc(jobId)}/runs`),
+
+  kanban: (gatewayId: string) =>
+    request<{ plugin: boolean; version?: string; boards: KanbanBoardMeta[]; current?: string }>("GET", `/gateways/${gatewayId}/kanban`),
+  createKanbanBoard: (gatewayId: string, slug: string, name: string) =>
+    request<{ ok: true }>("POST", `/gateways/${gatewayId}/kanban/boards`, { slug, name }),
+  kanbanBoard: (gatewayId: string, board: string) => request<KanbanBoard>("GET", `/gateways/${gatewayId}/kanban/boards/${enc(board)}`),
+  createKanbanCard: (
+    gatewayId: string,
+    board: string,
+    input: { title: string; body?: string; assigneeId?: string; assignee?: string; priority?: number; triage?: boolean },
+  ) => request<KanbanCard>("POST", `/gateways/${gatewayId}/kanban/boards/${enc(board)}/cards`, input),
+  kanbanCard: (gatewayId: string, board: string, cardId: string) =>
+    request<KanbanCardDetail>("GET", `/gateways/${gatewayId}/kanban/boards/${enc(board)}/cards/${enc(cardId)}`),
+  deleteKanbanCard: (gatewayId: string, board: string, cardId: string) =>
+    request<{ ok: true }>("DELETE", `/gateways/${gatewayId}/kanban/boards/${enc(board)}/cards/${enc(cardId)}`),
+  commentKanbanCard: (gatewayId: string, board: string, cardId: string, body: string) =>
+    request<{ ok: true }>("POST", `/gateways/${gatewayId}/kanban/boards/${enc(board)}/cards/${enc(cardId)}/comments`, { body }),
+  kanbanAction: (gatewayId: string, board: string, cardId: string, action: KanbanAction, body: Record<string, unknown> = {}) =>
+    request<unknown>("POST", `/gateways/${gatewayId}/kanban/boards/${enc(board)}/cards/${enc(cardId)}/actions/${action}`, body),
 };
+
+function enc(segment: string) {
+  return encodeURIComponent(segment);
+}

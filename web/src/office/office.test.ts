@@ -206,3 +206,17 @@ test("대표 talking over the current speaker doesn't put 대표's words in the 
   assert.equal(agents.get("a")!.bubble!.text, "제 생각에는");
   assert.equal(boss, "@bb 의견도 듣고 싶어요");
 });
+
+test("a Hermes employee busy on a kanban card or cron job works at their desk and says what", () => {
+  const layout = buildLayout(2);
+  const a = { ...agent("a"), external: { kind: "kanban" as const, title: "경쟁사 가격표 정리", board: "default" } };
+  const b = { ...agent("bb"), external: { kind: "cron" as const, title: "아침 브리핑" } };
+  const s = state([a, b]);
+  const goals = planGoals(s, layout, new Map([["a", { kind: "break", spot: 0, until: 1 } as Errand]]));
+  assert.equal(goals.get("a")!.activity, "work", "no coffee break while a card is running");
+  assert.equal(goals.get("bb")!.activity, "work");
+  const { agents } = planOverlays(s, new Map());
+  assert.deepEqual(agents.get("a")!.bubble, { text: "📋 경쟁사 가격표 정리", tone: "work" });
+  assert.deepEqual(agents.get("bb")!.bubble, { text: "⏰ 아침 브리핑", tone: "work" });
+  assert.equal(agents.get("a")!.typing, true);
+});

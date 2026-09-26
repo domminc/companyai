@@ -434,7 +434,7 @@ export class OfficeScene {
     if (now > this.nextBreakCheck && this.state) {
       this.nextBreakCheck = now + 4000;
       const onBreak = [...this.errands.values()].filter((e) => e.kind === "break").length;
-      const idle = this.state.agents.filter((a) => a.status === "idle" && !this.errands.has(a.id) && this.actors.get(a.id)?.arrivedAt);
+      const idle = this.state.agents.filter((a) => a.status === "idle" && !a.external && !this.errands.has(a.id) && this.actors.get(a.id)?.arrivedAt);
       if (idle.length && onBreak < this.layout.lounge.spots.length - 1 && Math.random() < 0.25) {
         const agent = idle[Math.floor(Math.random() * idle.length)];
         const used = new Set([...this.errands.values()].flatMap((e) => (e.kind === "break" ? [e.spot] : [])));

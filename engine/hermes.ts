@@ -108,11 +108,11 @@ export class HermesClient {
     return `${this.baseUrl}${prefix}${path}`;
   }
 
-  private async request(path: string, init: RequestInit & { signal?: AbortSignal } = {}): Promise<Response> {
+  private async request(path: string, init: RequestInit & { signal?: AbortSignal } = {}, prefixed = true): Promise<Response> {
     for (let attempt = 0; ; attempt++) {
       let res: Response;
       try {
-        res = await this.fetchImpl(this.url(path), {
+        res = await this.fetchImpl(prefixed ? this.url(path) : `${this.baseUrl}${path}`, {
           ...init,
           headers: {
             "Content-Type": "application/json",
@@ -130,11 +130,22 @@ export class HermesClient {
         await this.sleep(Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : 500 * 2 ** attempt);
         continue;
       }
-      const body = await res.text().catch(() => "");
+      const body = errorText(await res.text().catch(() => ""));
       const code: HermesErrorCode =
         res.status === 401 || res.status === 403 ? "unauthorized" : res.status === 404 ? "unknown_profile" : "http_error";
       throw new HermesError(code, body || `HTTP ${res.status}`, res.status);
     }
+  }
+
+  /**
+   * A JSON call to any other gateway route (DeskRPG plugin, cron jobs). With `prefixed: false`
+   * the path is used as given: plugin routes spell out `/p/<profile>` themselves, and owner-scope
+   * routes (kanban) take none.
+   */
+  async json<T>(method: string, path: string, body?: unknown, { prefixed = true } = {}): Promise<T> {
+    const res = await this.request(path, { method, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }, prefixed);
+    const text = await res.text();
+    return (text ? JSON.parse(text) : {}) as T;
   }
 
   /** Cheap reachability + auth check. */
@@ -203,6 +214,21 @@ export class HermesClient {
     if (!terminal && !accumulated) throw new HermesError("run_failed", "Run event stream ended without a result");
     return final ?? accumulated;
   }
+}
+
+/** `{"error": {"message": ...}}`, `{"error": "code", "detail": ...}` or plain text → one line. */
+function errorText(body: string): string {
+  try {
+    const parsed = JSON.parse(body) as { error?: unknown; detail?: unknown; message?: unknown };
+    const err = parsed.error as { message?: unknown } | string | undefined;
+    const parts = [typeof err === "string" ? err : err?.message, parsed.detail, parsed.message].filter(
+      (p): p is string => typeof p === "string" && !!p,
+    );
+    if (parts.length) return parts.join(": ");
+  } catch {
+    // not JSON
+  }
+  return body.slice(0, 300);
 }
 
 export function describeHermesError(err: HermesError): string {

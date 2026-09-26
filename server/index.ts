@@ -59,6 +59,34 @@ route("POST", "/api/agents", async ({ body }) => {
 route("PATCH", "/api/agents/:id", ({ params, body }) => company.updateAgent(params.id, body));
 route("DELETE", "/api/agents/:id", ({ params }) => (company.fire(params.id), { ok: true }));
 
+// Hermes employees' automations (cron jobs on their profile)
+route("GET", "/api/agents/:id/automations", ({ params }) => company.listAutomations(params.id));
+route("POST", "/api/agents/:id/automations", ({ params, body }) => company.createAutomation(params.id, body));
+route("PATCH", "/api/agents/:id/automations/:job", ({ params, body }) => company.updateAutomation(params.id, params.job, body));
+route("DELETE", "/api/agents/:id/automations/:job", async ({ params }) => (await company.automationAction(params.id, params.job, "delete"), { ok: true }));
+route("GET", "/api/agents/:id/automations/:job/runs", ({ params }) => company.automationRuns(params.id, params.job));
+route("POST", "/api/agents/:id/automations/:job/:action", async ({ params }) => {
+  const action = params.action;
+  if (action !== "pause" && action !== "resume" && action !== "run") throw new EngineError(`알 수 없는 동작: ${action}`, 404);
+  await company.automationAction(params.id, params.job, action);
+  return { ok: true };
+});
+
+// The gateway's Hermes kanban (DeskRPG plugin)
+const kanban = "/api/gateways/:id/kanban";
+route("GET", kanban, ({ params }) => company.kanbanOverview(params.id));
+route("POST", `${kanban}/boards`, ({ params, body }) => company.kanbanCreateBoard(params.id, body));
+route("GET", `${kanban}/boards/:board`, ({ params }) => company.kanbanBoard(params.id, params.board));
+route("POST", `${kanban}/boards/:board/cards`, ({ params, body }) => company.kanbanCreateCard(params.id, params.board, body));
+route("GET", `${kanban}/boards/:board/cards/:card`, ({ params }) => company.kanbanCard(params.id, params.board, params.card));
+route("DELETE", `${kanban}/boards/:board/cards/:card`, ({ params }) => company.kanbanDeleteCard(params.id, params.board, params.card));
+route("POST", `${kanban}/boards/:board/cards/:card/comments`, ({ params, body }) =>
+  company.kanbanComment(params.id, params.board, params.card, String(body.body ?? "")),
+);
+route("POST", `${kanban}/boards/:board/cards/:card/actions/:action`, ({ params, body }) =>
+  company.kanbanAction(params.id, params.board, params.card, params.action as never, body ?? {}),
+);
+
 route("POST", "/api/tasks", ({ body }) => company.createTask(body));
 route("PATCH", "/api/tasks/:id", ({ params, body }) => company.updateTask(params.id, body));
 route("POST", "/api/tasks/:id/retry", ({ params }) => company.retryTask(params.id));
@@ -163,6 +191,8 @@ const server = createServer(async (req, res) => {
   sendJSON(res, 404, { error: "Not found" });
 });
 
+const stopHermesSync = company.startHermesSync(Number(process.env.COMPANYAI_HERMES_SYNC_MS ?? 15_000));
+
 server.listen(PORT, () => {
   console.log(`CompanyAI engine listening on http://localhost:${PORT}`);
   console.log(`  LLM provider: ${company.provider}${company.provider === "mock" ? " (set ANTHROPIC_API_KEY to use Claude)" : ""}`);
@@ -170,6 +200,7 @@ server.listen(PORT, () => {
 });
 
 async function shutdown() {
+  stopHermesSync();
   server.close();
   // Running work is recovered (re-queued) on the next start.
   await company.flush();

@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect, useState } from "react";
 import { api, type CompanyState, type ModelOption } from "./api";
 import { timeAgo } from "./components/common";
 import { GatewaysDialog } from "./components/GatewaysDialog";
+import { HermesKanbanView } from "./components/HermesKanbanView";
 import { MeetingsView } from "./components/MeetingsView";
 import { TasksView } from "./components/TasksView";
 import { TeamView } from "./components/TeamView";
@@ -10,13 +11,14 @@ import { useCompany } from "./store";
 // three.js is large; load the 3D office only when its tab opens.
 const OfficeView = lazy(() => import("./components/OfficeView").then((m) => ({ default: m.OfficeView })));
 
-type Tab = "office" | "team" | "tasks" | "meetings";
+type Tab = "office" | "team" | "tasks" | "meetings" | "hermes";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "office", label: "오피스" },
   { id: "team", label: "직원" },
   { id: "tasks", label: "업무" },
   { id: "meetings", label: "회의" },
+  { id: "hermes", label: "Hermes 칸반" },
 ];
 
 export function App() {
@@ -41,13 +43,14 @@ export function App() {
     team: state.agents.length,
     tasks: state.tasks.filter((t) => t.status === "todo" || t.status === "in_progress").length,
     meetings: state.meetings.filter((m) => m.status === "scheduled" || m.status === "running").length,
+    hermes: state.agents.filter((a) => a.external).length,
   };
 
   return (
     <div className="app">
       <CompanyHeader state={state} provider={provider} models={models} connected={connected} />
       <nav className="tabs">
-        {TABS.map((t) => (
+        {TABS.filter((t) => t.id !== "hermes" || state.gateways.length > 0).map((t) => (
           <button key={t.id} className={tab === t.id ? "active" : ""} onClick={() => setTab(t.id)}>
             {t.label}
             {counts[t.id] > 0 && <span className="count">{counts[t.id]}</span>}
@@ -67,6 +70,7 @@ export function App() {
           {tab === "team" && <TeamView state={state} models={models} />}
           {tab === "tasks" && <TasksView state={state} />}
           {tab === "meetings" && <MeetingsView state={state} />}
+          {tab === "hermes" && <HermesKanbanView state={state} />}
         </main>
         <ActivityFeed state={state} />
       </div>

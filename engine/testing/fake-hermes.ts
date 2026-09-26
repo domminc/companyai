@@ -8,6 +8,7 @@
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
+import { createFakeOps, type FakeOps, type FakeOpsOptions } from "./fake-hermes-ops";
 
 export interface FakeRunRequest {
   profile: string;
@@ -27,6 +28,8 @@ export interface FakeHermesOptions {
   /** Reject this many run submissions with 429 before accepting (tests the retry). */
   rateLimitFirst?: number;
   chunkDelayMs?: number;
+  /** Cron jobs and the DeskRPG plugin's kanban. */
+  ops?: FakeOpsOptions;
 }
 
 export interface FakeHermes {
@@ -34,6 +37,7 @@ export interface FakeHermes {
   runs: FakeRunRequest[];
   /** Run ids a client asked to stop. */
   stopped: string[];
+  ops: FakeOps;
   close(): Promise<void>;
 }
 
@@ -80,6 +84,7 @@ export async function startFakeHermes(opts: FakeHermesOptions = {}, port = 0): P
   const pending = new Map<string, FakeRunRequest>();
   let rateLimited = 0;
   let seq = 0;
+  const ops = createFakeOps(opts.ops);
 
   const authorized = (req: IncomingMessage, profile: string) => {
     const header = req.headers.authorization ?? "";
@@ -157,6 +162,7 @@ export async function startFakeHermes(opts: FakeHermesOptions = {}, port = 0): P
       return; // like Hermes, keep the connection open after the terminal event
     }
 
+    if (await ops.handle(req, res, profile, path, url)) return;
     json(res, 404, { error: "not found" });
   });
 
@@ -166,8 +172,10 @@ export async function startFakeHermes(opts: FakeHermesOptions = {}, port = 0): P
     url: `http://127.0.0.1:${actual}`,
     runs,
     stopped,
+    ops,
     close: () =>
       new Promise<void>((resolve) => {
+        ops.dispose();
         server.closeAllConnections();
         server.close(() => resolve());
       }),
@@ -178,8 +186,13 @@ export async function startFakeHermes(opts: FakeHermesOptions = {}, port = 0): P
 if (import.meta.url === `file://${process.argv[1]}`) {
   const port = Number(process.env.FAKE_HERMES_PORT ?? 8642);
   const fake = await startFakeHermes(
-    { apiKey: "dev-key", profiles: { researcher: undefined, coder: undefined }, chunkDelayMs: Number(process.env.FAKE_HERMES_DELAY_MS ?? 30) },
+    {
+      apiKey: "dev-key",
+      profiles: { researcher: undefined, coder: undefined },
+      chunkDelayMs: Number(process.env.FAKE_HERMES_DELAY_MS ?? 30),
+      ops: { plugin: process.env.FAKE_HERMES_PLUGIN !== "0", workMs: Number(process.env.FAKE_HERMES_WORK_MS ?? 6000) },
+    },
     port,
   );
-  console.log(`Fake Hermes gateway on ${fake.url}  (API key: dev-key, profiles: default, researcher, coder)`);
+  console.log(`Fake Hermes gateway on ${fake.url}  (API key: dev-key, profiles: default, researcher, coder, DeskRPG plugin: ${process.env.FAKE_HERMES_PLUGIN !== "0" ? "on" : "off"})`);
 }
