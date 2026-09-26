@@ -11,7 +11,8 @@
     "build": "vite build",
     "start": "tsx server/index.ts",
     "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test \"engine/**/*.test.ts\""
+    "test": "node --import tsx --test \"engine/**/*.test.ts\"",
+    "fake-hermes": "tsx engine/testing/fake-hermes.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.128.0",

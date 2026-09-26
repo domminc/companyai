@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, type CompanyState, type ModelOption } from "./api";
 import { timeAgo } from "./components/common";
+import { GatewaysDialog } from "./components/GatewaysDialog";
 import { MeetingsView } from "./components/MeetingsView";
 import { TasksView } from "./components/TasksView";
 import { TeamView } from "./components/TeamView";
@@ -67,6 +68,7 @@ function CompanyHeader({
   connected: boolean;
 }) {
   const [editing, setEditing] = useState(false);
+  const [gateways, setGateways] = useState(false);
   const [name, setName] = useState(state.name);
   const [mission, setMission] = useState(state.mission);
 
@@ -110,6 +112,9 @@ function CompanyHeader({
         )}
       </div>
       <div className="header-meta">
+        <button className="btn small" onClick={() => setGateways(true)}>
+          Hermes 연결{state.gateways.length > 0 && <span className="count">{state.gateways.length}</span>}
+        </button>
         <label className="row tight small">
           기본 모델
           <select value={state.defaultModel} onChange={(e) => api.updateCompany({ defaultModel: e.target.value })}>
@@ -121,10 +126,11 @@ function CompanyHeader({
           </select>
         </label>
         <span className={`provider ${provider}`} title={provider === "mock" ? "ANTHROPIC_API_KEY를 설정하고 서버를 재시작하면 실제 Claude가 일합니다." : undefined}>
-          {provider === "mock" ? "데모 모드 (mock)" : "Claude 연결됨"}
+          {provider === "mock" ? "Claude: 데모 모드" : "Claude 연결됨"}
         </span>
         <span className={`dot ${connected ? "on" : "off"}`} title={connected ? "실시간 연결됨" : "연결 끊김"} />
       </div>
+      {gateways && <GatewaysDialog state={state} onClose={() => setGateways(false)} />}
     </header>
   );
 }

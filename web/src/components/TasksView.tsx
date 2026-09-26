@@ -39,6 +39,7 @@ export function TasksView({ state }: { state: CompanyState }) {
                 return (
                   <button key={t.id} className={`card task-card status-${t.status}`} onClick={() => setSelected(t.id)}>
                     <strong>{t.title}</strong>
+                    {t.activeTool && <span className="tool-chip">🔧 {t.activeTool}</span>}
                     {t.status === "in_progress" && <p className="task-preview">{t.output.slice(-140) || "생각하는 중…"}</p>}
                     {t.status === "failed" && <p className="error-text small">{t.error}</p>}
                     <div className="task-meta">
@@ -150,6 +151,7 @@ function TaskDialog({ task, state, onClose }: { task: Task; state: CompanyState;
             </select>
           </label>
           {meeting && <span className="muted">📋 회의 "{meeting.topic}"에서 생성</span>}
+          {task.activeTool && <span className="tool-chip">🔧 {task.activeTool} 사용 중</span>}
         </div>
         {task.description && <p className="task-desc">{task.description}</p>}
 

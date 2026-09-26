@@ -1,4 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { describeHermesError, HermesError } from "./hermes";
 
 export const DEFAULT_MODEL = "claude-opus-5";
 
@@ -17,7 +18,8 @@ type Effort = "low" | "medium" | "high" | "xhigh" | "max";
  */
 export type LLMContext =
   | { kind: "task"; agentName: string; role: string; title: string }
-  | { kind: "meeting"; agentName: string; role: string; topic: string; round: number; rounds: number }
+  | { kind: "poll"; agentName: string; turnsTaken: number; remaining: number }
+  | { kind: "meeting"; agentName: string; role: string; topic: string; opening: boolean; last: boolean; others: string[] }
   | { kind: "recruit"; jobDescription: string }
   | { kind: "minutes"; topic: string; participants: { id: string; name: string; role: string }[] };
 
@@ -73,6 +75,7 @@ function textOf(message: Anthropic.Beta.BetaMessage): string {
 }
 
 export function describeError(err: unknown): string {
+  if (err instanceof HermesError) return describeHermesError(err);
   if (err instanceof Anthropic.AuthenticationError) return "Anthropic API 인증 실패: ANTHROPIC_API_KEY를 확인하세요.";
   if (err instanceof Anthropic.RateLimitError) return "Anthropic API 요청 한도 초과: 잠시 후 다시 시도하세요.";
   if (err instanceof Anthropic.BadRequestError) return `잘못된 요청: ${err.message}`;
@@ -185,10 +188,17 @@ function mockText(ctx: LLMContext): string {
         "",
         "*(mock 모드 응답입니다. ANTHROPIC_API_KEY를 설정하면 실제 Claude가 일합니다.)*",
       ].join("\n");
+    case "poll":
+      // Speak twice, then pass - enough to show floor control without an endless meeting.
+      return ctx.turnsTaken < 2 && ctx.remaining > 0 ? `SPEAK: ${ctx.agentName} 관점에서 보탤 내용이 있습니다` : "PASS";
     case "meeting":
-      return ctx.round === ctx.rounds
+      if (ctx.opening) {
+        const invite = ctx.others.at(-1);
+        return `오늘은 "${ctx.topic}"에 대해 우선순위와 담당을 정하려고 합니다. 목표는 이번 분기 안에 검증 가능한 결과를 내는 것입니다.${invite ? ` @${invite}님 의견부터 들어볼까요?` : ""}`;
+      }
+      return ctx.last
         ? `${ctx.role} 입장에서 정리하면, "${ctx.topic}"은(는) 작게 시작해서 빠르게 검증하는 방향에 동의합니다. 제가 맡을 부분을 이번 주 안에 초안으로 공유하겠습니다.`
-        : `${ctx.role}로서 보면 "${ctx.topic}"에서 가장 중요한 건 우선순위입니다. 먼저 사용자 가치가 가장 큰 항목부터 정하고, 제 쪽에서는 필요한 리소스를 추정해 보겠습니다.`;
+        : `${ctx.role}로서 보면 "${ctx.topic}"에서 가장 중요한 건 우선순위입니다. 사용자 가치가 가장 큰 항목부터 정하고, 제 쪽에서는 필요한 리소스를 추정해 보겠습니다.`;
     default:
       return "";
   }

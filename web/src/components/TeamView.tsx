@@ -42,6 +42,7 @@ export function TeamView({ state, models }: { state: CompanyState; models: Model
                   </div>
                   <StatusBadge status={a.status} />
                 </div>
+                <RuntimeBadge agent={a} state={state} models={models} />
                 <p className="agent-now">
                   {current ? `▶ ${current.title}` : a.status === "in_meeting" ? "회의에 참석 중" : "다음 일을 기다리는 중"}
                 </p>
@@ -65,17 +66,34 @@ export function TeamView({ state, models }: { state: CompanyState; models: Model
         </div>
       )}
 
-      {hiring && <HireDialog models={models} defaultModel={state.defaultModel} onClose={() => setHiring(false)} />}
-      {agent && <AgentDialog agent={agent} models={models} onClose={() => setSelected(null)} />}
+      {hiring && <HireDialog state={state} models={models} onClose={() => setHiring(false)} />}
+      {agent && <AgentDialog agent={agent} state={state} models={models} onClose={() => setSelected(null)} />}
     </section>
   );
 }
 
-function HireDialog({ models, defaultModel, onClose }: { models: ModelOption[]; defaultModel: string; onClose: () => void }) {
+export function RuntimeBadge({ agent, state, models }: { agent: Agent; state: CompanyState; models: ModelOption[] }) {
+  if (agent.runtime.kind === "claude") {
+    const model = agent.runtime.model;
+    return <span className="runtime claude">{models.find((m) => m.id === model)?.label ?? model}</span>;
+  }
+  const { gatewayId, profile } = agent.runtime;
+  const gw = state.gateways.find((g) => g.id === gatewayId);
+  return (
+    <span className="runtime hermes" title="Hermes Agent 프로필 — 도구·스킬·메모리를 가진 에이전트">
+      Hermes · {profile}
+      {gw && <span className="muted"> @{gw.name}</span>}
+    </span>
+  );
+}
+
+function HireDialog({ state, models, onClose }: { state: CompanyState; models: ModelOption[]; onClose: () => void }) {
   const [mode, setMode] = useState<"recruit" | "manual">("recruit");
   const [jd, setJd] = useState("");
   const [profile, setProfile] = useState<CandidateProfile>({ name: "", role: "", persona: "", skills: [] });
-  const [model, setModel] = useState(defaultModel);
+  const [model, setModel] = useState(state.defaultModel);
+  const [brain, setBrain] = useState<"claude" | "hermes">("claude");
+  const [hermes, setHermes] = useState({ gatewayId: state.gateways[0]?.id ?? "", profile: "default", profileKey: "" });
   const [haveCandidate, setHaveCandidate] = useState(false);
   const recruit = useAction();
   const hire = useAction();
@@ -129,7 +147,7 @@ function HireDialog({ models, defaultModel, onClose }: { models: ModelOption[]; 
           onSubmit={(e) => {
             e.preventDefault();
             hire.run(async () => {
-              await api.hire({ ...profile, model });
+              await api.hire(brain === "hermes" ? { ...profile, hermes } : { ...profile, model });
               onClose();
             });
           }}
@@ -145,36 +163,53 @@ function HireDialog({ models, defaultModel, onClose }: { models: ModelOption[]; 
               <input required value={profile.role} onChange={(e) => setProfile({ ...profile, role: e.target.value })} />
             </label>
           </div>
+          <fieldset>
+            <legend>두뇌</legend>
+            <div className="segmented">
+              <button type="button" className={brain === "claude" ? "active" : ""} onClick={() => setBrain("claude")}>
+                Claude 직접
+              </button>
+              <button
+                type="button"
+                className={brain === "hermes" ? "active" : ""}
+                disabled={!state.gateways.length}
+                title={state.gateways.length ? undefined : "먼저 상단의 'Hermes 연결'에서 게이트웨이를 등록하세요"}
+                onClick={() => setBrain("hermes")}
+              >
+                Hermes 프로필
+              </button>
+            </div>
+            {brain === "claude" ? (
+              <label>
+                모델
+                <select value={model} onChange={(e) => setModel(e.target.value)}>
+                  {models.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : (
+              <HermesFields gateways={state.gateways} value={hermes} onChange={setHermes} />
+            )}
+          </fieldset>
           <label>
             페르소나 (성격·경력·일하는 방식)
+            {brain === "hermes" && <span className="muted small">Hermes 직원의 정체성은 프로필의 SOUL.md를 따릅니다. 여기 적은 내용은 소개용입니다.</span>}
             <textarea rows={4} value={profile.persona} onChange={(e) => setProfile({ ...profile, persona: e.target.value })} />
           </label>
-          <div className="grid-2">
-            <label>
-              강점 (쉼표로 구분)
-              <input
-                value={profile.skills.join(", ")}
-                onChange={(e) => setProfile({ ...profile, skills: e.target.value.split(",") })}
-              />
-            </label>
-            <label>
-              모델
-              <select value={model} onChange={(e) => setModel(e.target.value)}>
-                {models.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
+          <label>
+            강점 (쉼표로 구분)
+            <input value={profile.skills.join(", ")} onChange={(e) => setProfile({ ...profile, skills: e.target.value.split(",") })} />
+          </label>
           <ErrorText error={hire.error} />
           <div className="row end">
             <button type="button" className="btn ghost" onClick={onClose}>
               취소
             </button>
             <button className="btn primary" disabled={hire.busy}>
-              {hire.busy ? "채용 중…" : "채용 확정"}
+              {hire.busy ? (brain === "hermes" ? "프로필 연결 확인 중…" : "채용 중…") : "채용 확정"}
             </button>
           </div>
         </form>
@@ -183,8 +218,56 @@ function HireDialog({ models, defaultModel, onClose }: { models: ModelOption[]; 
   );
 }
 
-function AgentDialog({ agent, models, onClose }: { agent: Agent; models: ModelOption[]; onClose: () => void }) {
-  const [draft, setDraft] = useState({ ...agent, skillsText: agent.skills.join(", ") });
+function HermesFields({
+  gateways,
+  value,
+  onChange,
+  lockGateway,
+}: {
+  gateways: CompanyState["gateways"];
+  value: { gatewayId: string; profile: string; profileKey: string };
+  onChange: (v: { gatewayId: string; profile: string; profileKey: string }) => void;
+  lockGateway?: boolean;
+}) {
+  return (
+    <div className="grid-3">
+      <label>
+        게이트웨이
+        <select value={value.gatewayId} disabled={lockGateway} onChange={(e) => onChange({ ...value, gatewayId: e.target.value })}>
+          {gateways.map((g) => (
+            <option key={g.id} value={g.id}>
+              {g.name}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label>
+        프로필
+        <input value={value.profile} onChange={(e) => onChange({ ...value, profile: e.target.value })} placeholder="default" />
+      </label>
+      <label>
+        프로필 키 (선택)
+        <input
+          type="password"
+          autoComplete="off"
+          value={value.profileKey}
+          onChange={(e) => onChange({ ...value, profileKey: e.target.value })}
+          placeholder="비우면 게이트웨이 키 사용"
+        />
+      </label>
+    </div>
+  );
+}
+
+function AgentDialog({ agent, state, models, onClose }: { agent: Agent; state: CompanyState; models: ModelOption[]; onClose: () => void }) {
+  const [draft, setDraft] = useState({
+    ...agent,
+    skillsText: agent.skills.join(", "),
+    model: agent.runtime.kind === "claude" ? agent.runtime.model : "",
+  });
+  const [hermes, setHermes] = useState(
+    agent.runtime.kind === "hermes" ? { gatewayId: agent.runtime.gatewayId, profile: agent.runtime.profile, profileKey: "" } : null,
+  );
   const save = useAction();
   const fire = useAction();
 
@@ -200,7 +283,9 @@ function AgentDialog({ agent, models, onClose }: { agent: Agent; models: ModelOp
               role: draft.role,
               persona: draft.persona,
               skills: draft.skillsText.split(","),
-              model: draft.model,
+              ...(hermes
+                ? { hermes: { profile: hermes.profile, ...(hermes.profileKey ? { profileKey: hermes.profileKey } : {}) } }
+                : { model: draft.model }),
             });
             onClose();
           });
@@ -223,13 +308,21 @@ function AgentDialog({ agent, models, onClose }: { agent: Agent; models: ModelOp
         </div>
         <label>
           페르소나
+          {hermes && <span className="muted small">정체성은 Hermes 프로필의 SOUL.md가 결정합니다.</span>}
           <textarea rows={5} value={draft.persona} onChange={(e) => setDraft({ ...draft, persona: e.target.value })} />
         </label>
-        <div className="grid-2">
-          <label>
-            강점
-            <input value={draft.skillsText} onChange={(e) => setDraft({ ...draft, skillsText: e.target.value })} />
-          </label>
+        <label>
+          강점
+          <input value={draft.skillsText} onChange={(e) => setDraft({ ...draft, skillsText: e.target.value })} />
+        </label>
+        {hermes ? (
+          <>
+            <HermesFields gateways={state.gateways} value={hermes} onChange={setHermes} lockGateway />
+            {agent.runtime.kind === "hermes" && agent.runtime.hasProfileKey && (
+              <p className="muted small">프로필 키가 저장되어 있습니다. 새 키를 입력하면 교체됩니다.</p>
+            )}
+          </>
+        ) : (
           <label>
             모델
             <select value={draft.model} onChange={(e) => setDraft({ ...draft, model: e.target.value })}>
@@ -240,7 +333,7 @@ function AgentDialog({ agent, models, onClose }: { agent: Agent; models: ModelOp
               ))}
             </select>
           </label>
-        </div>
+        )}
         <ErrorText error={save.error ?? fire.error} />
         <div className="row between">
           <button

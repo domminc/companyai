@@ -1,27 +1,35 @@
-import type { Agent, CompanyState, Meeting, Task } from "./types";
+import { speakerName, USER_DISPLAY_NAME } from "./meeting";
+import type { Agent, CompanyState, Meeting, SpeechEntry, Task } from "./types";
 
 const LANGUAGE_RULE = "Reply in the same language the request is written in.";
 
-export function agentSystemPrompt(agent: Agent, state: CompanyState): string {
+/** Who the agent is. Only Claude agents get this; a Hermes profile's identity is its SOUL.md. */
+export function agentIdentity(agent: Agent): string {
+  return [
+    `You are ${agent.name}.`,
+    agent.persona,
+    agent.skills.length ? `Your strengths: ${agent.skills.join(", ")}.` : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+/** Where the agent works. Sent to every backend. */
+export function workplaceContext(agent: Agent, state: CompanyState): string {
   const colleagues = state.agents
     .filter((a) => a.id !== agent.id)
     .map((a) => `- ${a.name} (${a.role})`)
     .join("\n");
   return [
-    `You are ${agent.name}, working as ${agent.role} at ${state.name}.`,
+    "<workplace>",
+    `You work at ${state.name} as ${agent.role}, under the name ${agent.name}.`,
     state.mission ? `Company mission: ${state.mission}` : "",
-    "",
-    "About you:",
-    agent.persona,
-    agent.skills.length ? `Your strengths: ${agent.skills.join(", ")}.` : "",
-    "",
-    colleagues ? `Your colleagues:\n${colleagues}` : "You are currently the only member of the company.",
-    "",
-    "You work entirely in text: you cannot browse, run code or contact anyone outside this conversation.",
+    colleagues ? `Colleagues:\n${colleagues}` : "You are currently the only member of the company.",
     "When information is missing, state your assumptions briefly and proceed instead of asking questions.",
     LANGUAGE_RULE,
+    "</workplace>",
   ]
-    .filter((line, i, all) => line !== "" || all[i - 1] !== "")
+    .filter(Boolean)
     .join("\n");
 }
 
@@ -43,36 +51,6 @@ export function taskPrompt(task: Task, sourceMeeting?: Meeting): string {
   return parts.join("\n");
 }
 
-export function meetingTurnPrompt(meeting: Meeting, state: CompanyState, speaker: Agent, round: number): string {
-  const nameOf = (id: string) => state.agents.find((a) => a.id === id)?.name ?? "(former member)";
-  const participants = meeting.participantIds
-    .map((id) => state.agents.find((a) => a.id === id))
-    .filter((a): a is Agent => !!a)
-    .map((a) => `- ${a.name} (${a.role})${a.id === speaker.id ? " <- you" : ""}`)
-    .join("\n");
-  const transcript = meeting.transcript
-    .filter((u) => u.content)
-    .map((u) => `[Round ${u.round}] ${nameOf(u.agentId)}: ${u.content}`)
-    .join("\n\n");
-  const isLast = round === meeting.rounds;
-  return [
-    `You are in a meeting. Topic: ${meeting.topic}`,
-    meeting.agenda ? `Agenda:\n${meeting.agenda}` : "",
-    "",
-    `Participants:\n${participants}`,
-    "",
-    transcript ? `Transcript so far:\n${transcript}` : "You are the first to speak.",
-    "",
-    `It is your turn in round ${round} of ${meeting.rounds}.`,
-    isLast
-      ? "This is the final round: help the group converge. State what you will personally take on."
-      : "Contribute from your role's perspective. Build on or challenge what others said; be concrete.",
-    "Speak as you would in a real meeting: 2-5 sentences, no headings, and do not prefix your name.",
-  ]
-    .filter((l) => l !== undefined)
-    .join("\n");
-}
-
 export const SECRETARY_SYSTEM = [
   "You are the meeting secretary. You write accurate, concise minutes from a transcript.",
   "Only record decisions and action items that participants actually agreed on or volunteered for.",
@@ -85,7 +63,8 @@ export function minutesPrompt(meeting: Meeting, state: CompanyState): string {
     .map((id) => state.agents.find((a) => a.id === id))
     .filter((a): a is Agent => !!a);
   const transcript = meeting.transcript
-    .map((u) => `${people.find((p) => p.id === u.agentId)?.name ?? "?"}: ${u.content}`)
+    .filter((e): e is SpeechEntry => e.kind === "speech" && !!e.content.trim())
+    .map((e) => `${speakerName(e.speakerId, state)}: ${e.content}`)
     .join("\n\n");
   return [
     `Meeting topic: ${meeting.topic}`,
@@ -93,6 +72,7 @@ export function minutesPrompt(meeting: Meeting, state: CompanyState): string {
     "",
     "Participants (use these ids for assigneeId, or an empty string if nobody owns it):",
     ...people.map((p) => `- id=${p.id} name=${p.name} role=${p.role}`),
+    `(${USER_DISPLAY_NAME} is the human running the company; never assign items to them.)`,
     "",
     "Transcript:",
     transcript,

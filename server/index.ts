@@ -46,7 +46,15 @@ route("GET", "/api/state", () => ({
 route("PATCH", "/api/company", ({ body }) => (company.updateCompany(body), company.snapshot()));
 
 route("POST", "/api/recruit", ({ body }) => company.recruit(String(body.jobDescription ?? "")));
-route("POST", "/api/agents", ({ body }) => company.hire(body));
+route("GET", "/api/gateways", () => company.snapshot().gateways);
+route("POST", "/api/gateways", ({ body }) => company.addGateway(body));
+route("POST", "/api/gateways/:id/test", ({ params }) => company.testGateway(params.id));
+route("DELETE", "/api/gateways/:id", ({ params }) => (company.removeGateway(params.id), { ok: true }));
+
+route("POST", "/api/agents", async ({ body }) => {
+  if (body.hermes) await company.verifyHermesProfile(body.hermes);
+  return company.hire(body);
+});
 route("PATCH", "/api/agents/:id", ({ params, body }) => company.updateAgent(params.id, body));
 route("DELETE", "/api/agents/:id", ({ params }) => (company.fire(params.id), { ok: true }));
 
@@ -57,6 +65,9 @@ route("DELETE", "/api/tasks/:id", ({ params }) => (company.deleteTask(params.id)
 
 route("POST", "/api/meetings", ({ body }) => company.startMeeting(body));
 route("POST", "/api/meetings/:id/cancel", ({ params }) => company.cancelMeeting(params.id));
+route("POST", "/api/meetings/:id/messages", ({ params, body }) => company.postMeetingMessage(params.id, String(body.content ?? "")));
+route("POST", "/api/meetings/:id/grant", ({ params, body }) => company.grantFloor(params.id, String(body.agentId ?? "")));
+route("POST", "/api/meetings/:id/end", ({ params }) => company.endMeeting(params.id));
 route("POST", "/api/meetings/:id/action-items/:index/promote", ({ params }) =>
   company.promoteActionItem(params.id, Number(params.index)),
 );

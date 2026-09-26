@@ -18,6 +18,8 @@ export function reduce(state: CompanyState | null, event: CompanyEvent): Company
       return { ...state, name: event.name, mission: event.mission, defaultModel: event.defaultModel };
     case "agent.updated":
       return { ...state, agents: upsert(state.agents, event.agent) };
+    case "gateways.updated":
+      return { ...state, gateways: event.gateways };
     case "agent.fired":
       return { ...state, agents: state.agents.filter((a) => a.id !== event.agentId) };
     case "task.updated":
@@ -39,8 +41,8 @@ export function reduce(state: CompanyState | null, event: CompanyEvent): Company
             ? m
             : {
                 ...m,
-                transcript: m.transcript.map((u) =>
-                  u.id === event.utteranceId ? { ...u, content: u.content + event.text } : u,
+                transcript: m.transcript.map((e) =>
+                  e.id === event.entryId && e.kind === "speech" ? { ...e, content: e.content + event.text } : e,
                 ),
               },
         ),

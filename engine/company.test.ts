@@ -15,7 +15,7 @@ test("hiring adds an idle agent with the default model", async () => {
   const state = company.snapshot();
   assert.equal(state.agents.length, 1);
   assert.equal(agent.status, "idle");
-  assert.equal(agent.model, state.defaultModel);
+  assert.deepEqual(agent.runtime, { kind: "claude", model: state.defaultModel });
   assert.throws(() => company.hire({ name: "", role: "PM" }), EngineError);
 });
 
@@ -62,7 +62,7 @@ test("a meeting produces a transcript, minutes and follow-up tasks", async () =>
   const company = await newCompany();
   const a = company.hire({ name: "정유나", role: "PM" });
   const b = company.hire({ name: "강지호", role: "Engineer" });
-  const meeting = company.startMeeting({ topic: "출시 계획", participantIds: [a.id, b.id], rounds: 2 });
+  const meeting = company.startMeeting({ topic: "출시 계획", participantIds: [a.id, b.id] });
 
   assert.equal(company.snapshot().agents.every((x) => x.status === "in_meeting"), true);
   await company.settle();
@@ -70,8 +70,18 @@ test("a meeting produces a transcript, minutes and follow-up tasks", async () =>
   const state = company.snapshot();
   const done = state.meetings.find((m) => m.id === meeting.id)!;
   assert.equal(done.status, "done");
-  assert.equal(done.transcript.length, 4);
-  assert.deepEqual(done.transcript.map((u) => u.agentId), [a.id, b.id, a.id, b.id]);
+  assert.equal(done.endReason, "all_passed");
+  // The chair opens and @mentions 강지호; after that the floor goes by raised hands.
+  const speeches = done.transcript.filter((e) => e.kind === "speech");
+  assert.deepEqual(
+    speeches.map((s) => [s.speakerId, s.via]),
+    [
+      [a.id, "opening"],
+      [b.id, "mention"],
+      [a.id, "hand"],
+      [b.id, "hand"],
+    ],
+  );
   assert.ok(done.summary);
   assert.equal(done.actionItems.length, 2);
   // Action items became tasks and the participants already worked on them.
@@ -85,7 +95,7 @@ test("a meeting waits for busy participants and blocks their next task", async (
   const a = company.hire({ name: "A", role: "PM" });
   const b = company.hire({ name: "B", role: "Engineer" });
   company.createTask({ title: "first", assigneeId: a.id });
-  const meeting = company.startMeeting({ topic: "sync", participantIds: [a.id, b.id], rounds: 1, createTasks: false });
+  const meeting = company.startMeeting({ topic: "sync", participantIds: [a.id, b.id], maxTurnsPerAgent: 1, createTasks: false });
   company.createTask({ title: "second", assigneeId: b.id });
 
   let snap = company.snapshot();
