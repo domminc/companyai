@@ -3,6 +3,7 @@
  * Local space: standing on y = 0, facing +z.
  */
 import * as THREE from "three";
+import type { Avatar } from "./figure";
 
 export interface Look {
   shirt: string;
@@ -58,10 +59,9 @@ function limb(radius: number, length: number, material: THREE.Material) {
   return pivot;
 }
 
-export class Character {
+/** The built-in avatar: always available, used until (or instead of) a GLB model. */
+export class Character implements Avatar {
   readonly root = new THREE.Group();
-  /** Invisible, generous hit volume for clicking. */
-  readonly hitbox: THREE.Mesh;
   private hips = new THREE.Group();
   private torso: THREE.Mesh;
   private head = new THREE.Group();
@@ -69,7 +69,6 @@ export class Character {
   private armR: THREE.Group;
   private legL: THREE.Group;
   private legR: THREE.Group;
-  private ring: THREE.Mesh;
   private phase = Math.random() * Math.PI * 2;
   private sitBlend = 0;
 
@@ -131,23 +130,6 @@ export class Character {
       this.hips.add(pin);
     }
     this.hips.add(this.head);
-
-    this.ring = new THREE.Mesh(
-      new THREE.RingGeometry(0.3, 0.38, 32),
-      new THREE.MeshBasicMaterial({ color: "#4f46e5", transparent: true, opacity: 0.9, depthWrite: false }),
-    );
-    this.ring.rotation.x = -Math.PI / 2;
-    this.ring.position.y = 0.012;
-    this.ring.visible = false;
-    this.root.add(this.ring);
-
-    this.hitbox = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.35, 1.5, 8), new THREE.MeshBasicMaterial({ visible: false }));
-    this.hitbox.position.y = 0.75;
-    this.root.add(this.hitbox);
-  }
-
-  setSelected(selected: boolean) {
-    this.ring.visible = selected;
   }
 
   /** Advance the animation. `t` is seconds since start. */

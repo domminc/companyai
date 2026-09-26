@@ -113,6 +113,8 @@ const MIME: Record<string, string> = {
   ".png": "image/png",
   ".ico": "image/x-icon",
   ".json": "application/json",
+  ".glb": "model/gltf-binary",
+  ".txt": "text/plain; charset=utf-8",
 };
 
 function serveStatic(pathname: string, res: ServerResponse) {

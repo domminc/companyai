@@ -6,7 +6,9 @@ import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { CSS2DObject, CSS2DRenderer } from "three/examples/jsm/renderers/CSS2DRenderer.js";
 import type { Agent, CompanyState } from "../../../engine/types";
-import { Character, type CharacterPose, lookFor } from "./character";
+import { Character, type CharacterPose, type Look, lookFor } from "./character";
+import { Figure } from "./figure";
+import { KenneyAvatar, loadModel, modelFor } from "./kenney";
 import { buildOffice, disposeTree, type OfficeModel, setScreen } from "./furniture";
 import { buildLayout, type OfficeLayout, type Spot, type Vec2 } from "./layout";
 import { WalkGrid } from "./pathfinding";
@@ -23,16 +25,34 @@ const WALK_SPEED = 1.5;
 const REPORT_STAY_MS = 5000;
 const REPORT_TIMEOUT_MS = 30000;
 const HERMES_BADGE = "#f59e0b";
+/** Default viewing direction: from the front, looking down at the floor. */
+const OVERVIEW_DIR = new THREE.Vector3(0, Math.sin(0.95), Math.cos(0.95)).normalize();
+const COMMUTE_KEY = "companyai.office.commuted";
+const COMMUTE_GAP_MS = 700;
+
+/** The morning commute plays once per browser session, not on every refresh. */
+function takeCommute(): boolean {
+  try {
+    if (sessionStorage.getItem(COMMUTE_KEY)) return false;
+    sessionStorage.setItem(COMMUTE_KEY, "1");
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 interface Actor {
   id: string;
-  character: Character;
+  name: string;
+  character: Figure;
   pos: Vec2;
   heading: number;
   path: Vec2[];
   goal?: Goal;
   arrivedAt?: number;
   leaving?: boolean;
+  /** Waiting outside to walk in (the morning commute). */
+  enterAt?: number;
   label: CSS2DObject;
   nameEl: HTMLDivElement;
   bubble: CSS2DObject;
@@ -73,9 +93,10 @@ export class OfficeScene {
   private initialized = false;
   private selected: string | null = null;
   private view: CameraView = "overview";
-  private tween: { target: THREE.Vector3; distance: number } | null = null;
+  /** Camera glide: towards a target point and distance, optionally back to a viewing direction. */
+  private tween: { target: THREE.Vector3; distance: number; dir?: THREE.Vector3 } | null = null;
   private raf = 0;
-  private clock = new THREE.Clock();
+  private timer = new THREE.Timer();
   private nextBreakCheck = 0;
   private resize: ResizeObserver;
   private pointerDown: { x: number; y: number } | null = null;
@@ -88,7 +109,7 @@ export class OfficeScene {
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.renderer.shadowMap.type = THREE.PCFShadowMap;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.05;
     container.appendChild(this.renderer.domElement);
@@ -153,6 +174,7 @@ export class OfficeScene {
       if (!this.actors.has(agent.id)) this.spawn(agent);
       const actor = this.actors.get(agent.id)!;
       actor.nameEl.innerHTML = this.nameTag(agent);
+      actor.name = agent.name;
     }
     for (const [id, actor] of this.actors) {
       if (!present.has(id) && !actor.leaving) {
@@ -171,7 +193,7 @@ export class OfficeScene {
     this.view = view;
     const table = this.layout.meeting.table;
     this.userMovedCamera = false;
-    if (view === "overview") this.tween = this.overviewShot();
+    if (view === "overview") this.tween = { ...this.overviewShot(), dir: OVERVIEW_DIR.clone() };
     else this.tween = { target: new THREE.Vector3(table.x, 0.6, table.z), distance: Math.max(9, this.layout.meeting.room.w * 1.35) };
   }
 
@@ -181,6 +203,7 @@ export class OfficeScene {
   }
 
   dispose() {
+    this.disposed = true;
     cancelAnimationFrame(this.raf);
     this.resize.disconnect();
     this.renderer.domElement.removeEventListener("pointerdown", this.onPointerDown);
@@ -224,7 +247,7 @@ export class OfficeScene {
     if (first) {
       const shot = this.overviewShot();
       this.controls.target.copy(shot.target);
-      this.camera.position.copy(shot.target).add(new THREE.Vector3(0, Math.sin(0.95), Math.cos(0.95)).multiplyScalar(shot.distance));
+      this.camera.position.copy(shot.target).add(OVERVIEW_DIR.clone().multiplyScalar(shot.distance));
       this.controls.maxDistance = shot.distance * 1.6;
       this.controls.minDistance = 4;
       this.controls.update();
@@ -244,20 +267,40 @@ export class OfficeScene {
     return { target: new THREE.Vector3(0, 0, -0.4), distance: Math.max(fitWidth, fitDepth) };
   }
 
-  private createActor(id: string, name: string, look = lookFor(id), badge?: string): Actor {
-    const character = new Character(look, { badge });
+  /** Swaps in the animated GLB person once it has loaded; the built-in figure stays on failure. */
+  private upgradeAvatar(actor: Actor, model: string) {
+    loadModel(model).then(
+      (gltf) => {
+        const alive = actor === this.boss || this.actors.get(actor.id) === actor;
+        if (alive && !this.disposed) actor.character.setAvatar(new KenneyAvatar(gltf));
+      },
+      (err) => {
+        if (!this.warnedModels) console.warn("3D 캐릭터 모델을 불러오지 못해 기본 캐릭터를 씁니다.", err);
+        this.warnedModels = true;
+      },
+    );
+  }
+
+  private disposed = false;
+  private commute = takeCommute();
+  private commuteQueue = 0;
+  private warnedModels = false;
+
+  private createActor(id: string, name: string, look: Look = lookFor(id), badge?: string): Actor {
+    const character = new Figure(new Character(look, { badge }));
     character.hitbox.userData.actorId = id;
     const [label, nameEl] = makeLabel("office-name");
     nameEl.textContent = name;
-    label.position.set(0, 1.5, 0);
+    label.position.set(0, 1.62, 0);
     character.root.add(label);
     const [bubble, bubbleEl] = makeLabel("office-bubble");
-    bubble.position.set(0, 1.78, 0);
+    bubble.position.set(0, 1.9, 0);
     bubble.visible = false;
     character.root.add(bubble);
     this.scene.add(character.root);
-    return {
+    const actor: Actor = {
       id,
+      name,
       character,
       pos: { x: 0, z: 0 },
       heading: 0,
@@ -268,13 +311,21 @@ export class OfficeScene {
       bubbleEl,
       overlay: { handRaised: false, talking: false, typing: false },
     };
+    this.upgradeAvatar(actor, modelFor(id));
+    return actor;
   }
 
   private spawn(agent: Agent) {
     const actor = this.createActor(agent.id, agent.name, lookFor(agent.id), agent.runtime.kind === "hermes" ? HERMES_BADGE : undefined);
     actor.character.setSelected(agent.id === this.selected);
     this.actors.set(agent.id, actor);
-    if (!this.initialized) {
+    if (!this.initialized && this.commute) {
+      // Morning commute: everyone walks in through the entrance, one after another.
+      this.placeStatic(actor, { ...this.layout.entrance, z: this.layout.depth / 2 + 0.15 });
+      actor.arrivedAt = undefined;
+      actor.enterAt = performance.now() + 400 + this.commuteQueue++ * COMMUTE_GAP_MS;
+      actor.character.root.visible = false;
+    } else if (!this.initialized) {
       // Already at work when the page loads: start at the desk.
       const desk = this.layout.desks[(deskAssignments(this.state!.agents).get(agent.id) ?? 0) % this.layout.desks.length];
       this.placeStatic(actor, desk.seat);
@@ -333,12 +384,19 @@ export class OfficeScene {
   }
 
   private setBubble(actor: Actor, bubble: Overlay["bubble"]) {
-    const key = bubble ? `${bubble.tone}|${bubble.text}` : "";
+    const key = bubble ? `${actor.name}|${bubble.tone}|${bubble.text}` : "";
     if (key === actor.bubbleKey) return;
     actor.bubbleKey = key;
     actor.bubble.visible = !!bubble;
+    // In close-ups the bubble would cover the name tag, so the bubble carries the name instead.
+    actor.label.visible = !bubble;
     actor.bubbleEl.className = `office-bubble ${bubble ? `tone-${bubble.tone}` : ""}`;
-    actor.bubbleEl.textContent = bubble?.text ?? "";
+    actor.bubbleEl.replaceChildren();
+    if (bubble) {
+      const who = document.createElement("b");
+      who.textContent = actor.name;
+      actor.bubbleEl.append(who, ` ${bubble.text}`);
+    }
   }
 
   private tickErrands(now: number) {
@@ -376,6 +434,11 @@ export class OfficeScene {
   }
 
   private stepActor(actor: Actor, dt: number, t: number, now: number) {
+    if (actor.enterAt) {
+      if (now < actor.enterAt) return;
+      actor.enterAt = undefined;
+      actor.character.root.visible = true;
+    }
     const moving = actor.path.length > 0;
     if (moving) {
       let remaining = WALK_SPEED * dt;
@@ -431,8 +494,9 @@ export class OfficeScene {
 
   private loop = () => {
     this.raf = requestAnimationFrame(this.loop);
-    const dt = Math.min(this.clock.getDelta(), 0.1);
-    const t = this.clock.elapsedTime;
+    this.timer.update();
+    const dt = Math.min(this.timer.getDelta(), 0.1);
+    const t = this.timer.getElapsed();
     const now = performance.now();
 
     this.tickErrands(now);
@@ -447,16 +511,18 @@ export class OfficeScene {
 
     if (this.view === "follow") {
       const target = this.followTarget();
-      if (target) this.tween = { target, distance: 8 };
+      if (target) this.tween = { target, distance: 11 };
     }
     if (this.tween) {
       const k = 1 - Math.exp(-dt * 3);
       this.controls.target.lerp(this.tween.target, k);
       const offset = this.camera.position.clone().sub(this.controls.target);
       const len = offset.length();
+      if (this.tween.dir) offset.normalize().lerp(this.tween.dir, k).normalize().multiplyScalar(len);
       offset.setLength(len + (this.tween.distance - len) * k);
       this.camera.position.copy(this.controls.target).add(offset);
-      if (this.view !== "follow" && this.controls.target.distanceTo(this.tween.target) < 0.01 && Math.abs(len - this.tween.distance) < 0.05) {
+      const aligned = !this.tween.dir || offset.clone().normalize().distanceTo(this.tween.dir) < 0.005;
+      if (this.view !== "follow" && aligned && this.controls.target.distanceTo(this.tween.target) < 0.01 && Math.abs(len - this.tween.distance) < 0.05) {
         this.tween = null;
       }
     }

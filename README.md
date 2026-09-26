@@ -8,7 +8,9 @@ AI 에이전트를 **직원으로 고용**하고, **업무를 지시**하고, **
 
 회의는 [DeskRPG](https://github.com/dandacompany/deskrpg)의 회의 방식을 참고한 **발언권 시스템**으로 진행되고, 끝나면 서기가 회의록을 쓰고 액션 아이템을 담당자에게 업무로 배정합니다.
 
-첫 화면은 **3D 오피스**입니다. 엔진 상태에 따라 직원들이 실제로 움직입니다: 일하는 직원은 책상에서 타이핑하고(모니터가 켜짐), 회의가 시작되면 회의실로 걸어가 앉고, 발언자는 말풍선으로 말하고, 손을 든 사람은 팔을 듭니다. 업무를 끝내면 대표 자리로 걸어와 완료 보고를 하고, 한가한 직원은 가끔 라운지로 쉬러 갑니다. 새로 채용한 직원은 입구로 들어오고, 내보낸 직원은 입구로 나갑니다.
+첫 화면은 **3D 오피스**입니다. 엔진 상태에 따라 직원들이 실제로 움직입니다: 일하는 직원은 책상에서 타이핑하고(모니터가 켜짐), 회의가 시작되면 회의실로 걸어가 앉고, 발언자는 말풍선으로 말하고, 손을 든 사람은 팔을 듭니다. 업무를 끝내면 대표 자리로 걸어와 완료 보고를 하고, 한가한 직원은 가끔 라운지로 쉬러 갑니다. 새로 채용한 직원은 입구로 들어오고, 내보낸 직원은 입구로 나갑니다. 브라우저 세션마다 처음 열 때는 모두가 차례로 **출근**해 자리에 앉습니다.
+
+직원 외형은 [Kenney Mini Characters](https://kenney.nl/assets/mini-characters)(CC0) 12종 중 하나가 자동으로 배정되고, 걷기·앉기·끄덕임 애니메이션을 씁니다. 타이핑·발언 제스처·손들기는 애니메이션 위에 팔과 머리를 직접 움직여 표현합니다. 모델을 불러오지 못하면 코드로 만든 기본 캐릭터로 표시됩니다.
 
 ```
 채용(공고 → AI 후보 추천 → 확정, Claude 또는 Hermes 프로필)  →  업무 지시  →  직원이 스트리밍으로 결과물 작성
@@ -101,12 +103,15 @@ engine/            # UI와 무관한 순수 엔진 (다른 앱에서도 import �
   *.test.ts        # 엔진·회의 발언권·Hermes 연동 테스트
   testing/         # 가짜 Hermes 게이트웨이, 스크립트 LLM
 server/index.ts    # REST API + SSE(/api/events) + 빌드된 UI 서빙
+web/public/models/kenney/  # Kenney Mini Characters (CC0) — License.txt 포함
 web/               # React + Vite UI
   src/office/      # 3D 오피스 (three.js)
     layout.ts      #   평면도: 책상·회의실·대표석·라운지 배치 (인원에 따라 커짐)
     pathfinding.ts #   A* 길찾기 (가구·유리벽을 돌아 문으로)
     plan.ts        #   엔진 상태 → 직원별 목적지·말풍선·동작 (순수 함수, 테스트 있음)
-    character.ts   #   코드로 만든 로우폴리 캐릭터와 걷기·앉기·타이핑·발언·손들기 동작
+    figure.ts      #   위치·선택 표시·클릭 영역을 담는 컨테이너 (외형 교체 가능)
+    kenney.ts      #   Kenney 캐릭터(GLB) 로딩과 애니메이션·제스처
+    character.ts   #   코드로 만든 기본 캐릭터 (모델 로딩 전/실패 시)
     furniture.ts   #   방·가구
     scene.ts       #   렌더링 루프, 카메라, 클릭, 보고/휴식 이벤트
 ```
@@ -175,3 +180,4 @@ npm run typecheck
 
 - [DeskRPG](https://github.com/dandacompany/deskrpg) · [DeskRPG Hermes 플러그인](https://github.com/dandacompany/deskrpg-hermes-plugin) — 3D 가상 오피스 컨셉, 회의 발언권(손들기·공정성·발언 한도·지명), Hermes 연동 방식. DeskRPG는 Sustainable Use License라서 코드·에셋은 가져오지 않았고, 3D 오피스와 캐릭터는 모두 이 저장소에서 새로 만들었습니다.
 - [Hermes Agent](https://github.com/NousResearch/hermes-agent) — API Server / Runs API
+- [Kenney Mini Characters](https://kenney.nl/assets/mini-characters) — 직원 3D 캐릭터 (CC0, www.kenney.nl)

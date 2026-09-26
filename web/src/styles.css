@@ -1148,6 +1148,9 @@ button.card:hover {
   border-top-color: #fff;
   border-bottom: 0;
 }
+.office-bubble b {
+  margin-right: 4px;
+}
 .office-bubble.tone-work {
   background: #eef2ff;
   color: #3730a3;
