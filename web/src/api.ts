@@ -1,5 +1,6 @@
 import type {
   Agent,
+  AgentTool,
   CandidateProfile,
   ChatMessage,
   ChatThread,
@@ -13,7 +14,7 @@ import type {
 } from "../../engine/types";
 import type { ActionItemEdit } from "../../engine/company";
 
-export type { ActionItemEdit, Agent, CandidateProfile, ChatMessage, ChatThread, CompanyState, HermesGateway, Meeting, MeetingEntry, Task, TaskReview };
+export type { ActionItemEdit, Agent, AgentTool, CandidateProfile, ChatMessage, ChatThread, CompanyState, HermesGateway, Meeting, MeetingEntry, Task, TaskReview };
 export { USER_SPEAKER } from "../../engine/types";
 
 export interface ModelOption {

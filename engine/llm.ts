@@ -1,5 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { describeHermesError, HermesError } from "./hermes";
+import type { AgentTool } from "./types";
 
 export const DEFAULT_MODEL = "claude-opus-5";
 
@@ -31,6 +32,8 @@ export interface TextRequest {
   prompt: string;
   effort?: Effort;
   context: LLMContext;
+  /** Server tools the model may use while answering (text requests only). */
+  tools?: AgentTool[];
 }
 
 export interface JSONRequest extends TextRequest {
@@ -39,7 +42,8 @@ export interface JSONRequest extends TextRequest {
 
 export interface LLM {
   readonly name: string;
-  streamText(req: TextRequest, onDelta: (text: string) => void): Promise<string>;
+  /** `onTool` reports the server tool in use ("web_search: 환율") and null when its result is back. */
+  streamText(req: TextRequest, onDelta: (text: string) => void, onTool?: (tool: string | null) => void): Promise<string>;
   generateJSON<T>(req: JSONRequest): Promise<T>;
 }
 
@@ -60,6 +64,41 @@ function effortOption(model: string, effort?: Effort) {
 function withEffort(model: string, effort?: Effort) {
   const option = effortOption(model, effort);
   return "effort" in option ? { output_config: option } : {};
+}
+
+/**
+ * Anthropic server tools for the chosen capabilities. The 20260209 web tools filter results
+ * with their own code sandbox, so when the employee also has the general sandbox (or runs on
+ * Haiku, which lacks dynamic filtering) the plain versions are used to avoid two sandboxes.
+ */
+export function serverTools(model: string, tools: AgentTool[] = []): Anthropic.Beta.BetaToolUnion[] {
+  const web = tools.includes("web");
+  const code = tools.includes("code");
+  const result: Anthropic.Beta.BetaToolUnion[] = [];
+  if (web && (code || model.startsWith("claude-haiku"))) {
+    result.push({ type: "web_search_20250305", name: "web_search", max_uses: 8 });
+    result.push({ type: "web_fetch_20250910", name: "web_fetch", max_uses: 8 });
+  } else if (web) {
+    result.push({ type: "web_search_20260209", name: "web_search", max_uses: 8 });
+    result.push({ type: "web_fetch_20260209", name: "web_fetch", max_uses: 8 });
+  }
+  if (code) result.push({ type: "code_execution_20260120", name: "code_execution" });
+  return result;
+}
+
+/** A long server-tool turn pauses; resume it this many times before giving up. */
+const MAX_RESUMES = 6;
+
+function clipLabel(text: string, max = 48): string {
+  const t = text.replace(/\s+/g, " ").trim();
+  return t.length > max ? `${t.slice(0, max)}…` : t;
+}
+
+/** "web_search: 2026 환율 전망" - what the activity chip shows while a server tool runs. */
+export function describeToolUse(name: string, input: unknown): string {
+  const i = (input ?? {}) as Record<string, unknown>;
+  const detail = [i.query, i.url, i.command, i.path, i.code].find((v): v is string => typeof v === "string" && !!v.trim());
+  return detail ? `${name}: ${clipLabel(detail)}` : name;
 }
 
 function assertNotRefused(message: Anthropic.Beta.BetaMessage) {
@@ -93,23 +132,57 @@ export class AnthropicLLM implements LLM {
     this.client = client;
   }
 
-  async streamText(req: TextRequest, onDelta: (text: string) => void): Promise<string> {
-    const stream = this.client.beta.messages.stream({
-      model: req.model,
-      max_tokens: 64000,
-      system: req.system,
-      messages: [{ role: "user", content: req.prompt }],
-      ...withEffort(req.model, req.effort),
-      ...fallbackOptions(req.model),
-    });
-    for await (const event of stream) {
-      if (event.type === "content_block_delta" && event.delta.type === "text_delta") {
-        onDelta(event.delta.text);
+  async streamText(req: TextRequest, onDelta: (text: string) => void, onTool?: (tool: string | null) => void): Promise<string> {
+    const tools = serverTools(req.model, req.tools);
+    const messages: Anthropic.Beta.BetaMessageParam[] = [{ role: "user", content: req.prompt }];
+    // What we return is exactly what was streamed, so the live view and the result agree.
+    let out = "";
+    let afterTool = false;
+    const emit = (text: string) => {
+      out += text;
+      onDelta(text);
+    };
+
+    for (let round = 0; ; round++) {
+      const stream = this.client.beta.messages.stream({
+        model: req.model,
+        max_tokens: 64000,
+        system: req.system,
+        messages,
+        ...(tools.length > 0 ? { tools } : {}),
+        ...withEffort(req.model, req.effort),
+        ...fallbackOptions(req.model),
+      });
+      for await (const event of stream) {
+        if (event.type === "content_block_start") {
+          const block = event.content_block;
+          if (block.type === "server_tool_use") {
+            afterTool = true;
+            onTool?.(block.name);
+          } else if (block.type === "text" && afterTool) {
+            // Text on either side of a search is two paragraphs, not one run-on sentence.
+            if (out && !out.endsWith("\n\n")) emit("\n\n");
+            afterTool = false;
+          } else if (block.type.endsWith("_tool_result")) {
+            onTool?.(null);
+          }
+        } else if (event.type === "content_block_stop") {
+          // The input arrives as JSON deltas; the snapshot has it parsed once the block ends.
+          const block = stream.currentMessage?.content[event.index];
+          if (block?.type === "server_tool_use") onTool?.(describeToolUse(block.name, block.input));
+        } else if (event.type === "content_block_delta" && event.delta.type === "text_delta") {
+          emit(event.delta.text);
+        }
       }
+      const message = await stream.finalMessage();
+      assertNotRefused(message);
+      if (message.stop_reason !== "pause_turn") break;
+      if (round >= MAX_RESUMES) throw new Error("도구 사용이 너무 길어져 중단했습니다.");
+      // Re-send the paused turn as is; the API picks up at its trailing server_tool_use.
+      messages.push({ role: "assistant", content: message.content as Anthropic.Beta.BetaContentBlockParam[] });
     }
-    const message = await stream.finalMessage();
-    assertNotRefused(message);
-    return textOf(message);
+    onTool?.(null);
+    return out;
   }
 
   async generateJSON<T>(req: JSONRequest): Promise<T> {
@@ -136,7 +209,22 @@ export class MockLLM implements LLM {
 
   constructor(private delayMs = 25) {}
 
-  async streamText(req: TextRequest, onDelta: (text: string) => void): Promise<string> {
+  async streamText(req: TextRequest, onDelta: (text: string) => void, onTool?: (tool: string | null) => void): Promise<string> {
+    // Pretend to use the tools the employee has, so the activity chip can be tried offline.
+    const wait = () => new Promise((r) => setTimeout(r, this.delayMs * 8));
+    if (req.context.kind === "task" || req.context.kind === "chat") {
+      const topic = req.context.kind === "task" ? req.context.title : req.context.message;
+      if (req.tools?.includes("web")) {
+        onTool?.(describeToolUse("web_search", { query: topic }));
+        await wait();
+        onTool?.(null);
+      }
+      if (req.tools?.includes("code") && req.context.kind === "task") {
+        onTool?.(describeToolUse("bash_code_execution", { command: "python analyze.py" }));
+        await wait();
+        onTool?.(null);
+      }
+    }
     const text = mockText(req.context);
     const chunks = text.match(/\S+\s*/g) ?? [text];
     for (const chunk of chunks) {

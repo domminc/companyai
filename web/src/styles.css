@@ -1467,3 +1467,20 @@ button.card:hover {
 .bubble.failed {
   border: 1px solid color-mix(in srgb, var(--danger) 40%, transparent);
 }
+
+.tool-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+}
+.tool-picker .check {
+  display: flex;
+  flex-direction: row;
+  align-items: baseline;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.tool-picker .check input {
+  width: auto;
+}

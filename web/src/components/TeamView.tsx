@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { api, type Agent, type CandidateProfile, type CompanyState, type ModelOption } from "../api";
+import { type Agent, type AgentTool, api, type CandidateProfile, type CompanyState, type ModelOption } from "../api";
 import { ChatDialog } from "./ChatDialog";
 import { Avatar, ErrorText, Modal, StatusBadge, useAction } from "./common";
 
@@ -88,8 +88,15 @@ export function TeamView({ state, models }: { state: CompanyState; models: Model
 
 export function RuntimeBadge({ agent, state, models }: { agent: Agent; state: CompanyState; models: ModelOption[] }) {
   if (agent.runtime.kind === "claude") {
-    const model = agent.runtime.model;
-    return <span className="runtime claude">{models.find((m) => m.id === model)?.label ?? model}</span>;
+    const { model, tools = [] } = agent.runtime;
+    return (
+      <span className="runtime claude" title={tools.length ? `도구: ${tools.map((t) => TOOL_INFO[t].label).join(", ")}` : undefined}>
+        {models.find((m) => m.id === model)?.label ?? model}
+        {tools.map((t) => (
+          <span key={t}> {TOOL_INFO[t].icon}</span>
+        ))}
+      </span>
+    );
   }
   const { gatewayId, profile } = agent.runtime;
   const gw = state.gateways.find((g) => g.id === gatewayId);
@@ -101,11 +108,37 @@ export function RuntimeBadge({ agent, state, models }: { agent: Agent; state: Co
   );
 }
 
+const TOOL_INFO: Record<AgentTool, { icon: string; label: string; hint: string }> = {
+  web: { icon: "🔎", label: "웹 검색·페이지 읽기", hint: "최신 정보를 찾아보고 출처를 인용합니다 (검색 1,000회당 약 $10)" },
+  code: { icon: "🧪", label: "코드 실행", hint: "Python 샌드박스에서 계산·데이터 분석·차트를 만듭니다 (인터넷 없음)" },
+};
+
+/** Anthropic server tools for a Claude employee. Used in 업무·1:1 대화·검토, not in meetings. */
+function ToolPicker({ value, onChange }: { value: AgentTool[]; onChange: (tools: AgentTool[]) => void }) {
+  return (
+    <div className="tool-picker">
+      <span className="muted small">도구 (업무·대화·검토에서 사용)</span>
+      {(Object.keys(TOOL_INFO) as AgentTool[]).map((t) => (
+        <label key={t} className="check" title={TOOL_INFO[t].hint}>
+          <input
+            type="checkbox"
+            checked={value.includes(t)}
+            onChange={(e) => onChange(e.target.checked ? [...value, t] : value.filter((x) => x !== t))}
+          />
+          {TOOL_INFO[t].icon} {TOOL_INFO[t].label}
+          <span className="muted small"> — {TOOL_INFO[t].hint}</span>
+        </label>
+      ))}
+    </div>
+  );
+}
+
 function HireDialog({ state, models, onClose }: { state: CompanyState; models: ModelOption[]; onClose: () => void }) {
   const [mode, setMode] = useState<"recruit" | "manual">("recruit");
   const [jd, setJd] = useState("");
   const [profile, setProfile] = useState<CandidateProfile>({ name: "", role: "", persona: "", skills: [] });
   const [model, setModel] = useState(state.defaultModel);
+  const [tools, setTools] = useState<AgentTool[]>([]);
   const [brain, setBrain] = useState<"claude" | "hermes">("claude");
   const [hermes, setHermes] = useState({ gatewayId: state.gateways[0]?.id ?? "", profile: "default", profileKey: "" });
   const [haveCandidate, setHaveCandidate] = useState(false);
@@ -161,7 +194,7 @@ function HireDialog({ state, models, onClose }: { state: CompanyState; models: M
           onSubmit={(e) => {
             e.preventDefault();
             hire.run(async () => {
-              await api.hire(brain === "hermes" ? { ...profile, hermes } : { ...profile, model });
+              await api.hire(brain === "hermes" ? { ...profile, hermes } : { ...profile, model, tools });
               onClose();
             });
           }}
@@ -194,16 +227,19 @@ function HireDialog({ state, models, onClose }: { state: CompanyState; models: M
               </button>
             </div>
             {brain === "claude" ? (
-              <label>
-                모델
-                <select value={model} onChange={(e) => setModel(e.target.value)}>
-                  {models.map((m) => (
-                    <option key={m.id} value={m.id}>
-                      {m.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
+              <>
+                <label>
+                  모델
+                  <select value={model} onChange={(e) => setModel(e.target.value)}>
+                    {models.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <ToolPicker value={tools} onChange={setTools} />
+              </>
             ) : (
               <HermesFields gateways={state.gateways} value={hermes} onChange={setHermes} />
             )}
@@ -290,6 +326,7 @@ function AgentDialog({
     ...agent,
     skillsText: agent.skills.join(", "),
     model: agent.runtime.kind === "claude" ? agent.runtime.model : "",
+    tools: agent.runtime.kind === "claude" ? (agent.runtime.tools ?? []) : [],
   });
   const [hermes, setHermes] = useState(
     agent.runtime.kind === "hermes" ? { gatewayId: agent.runtime.gatewayId, profile: agent.runtime.profile, profileKey: "" } : null,
@@ -311,7 +348,7 @@ function AgentDialog({
               skills: draft.skillsText.split(","),
               ...(hermes
                 ? { hermes: { profile: hermes.profile, ...(hermes.profileKey ? { profileKey: hermes.profileKey } : {}) } }
-                : { model: draft.model }),
+                : { model: draft.model, tools: draft.tools }),
             });
             onClose();
           });
@@ -352,16 +389,19 @@ function AgentDialog({
             )}
           </>
         ) : (
-          <label>
-            모델
-            <select value={draft.model} onChange={(e) => setDraft({ ...draft, model: e.target.value })}>
-              {models.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.label}
-                </option>
-              ))}
-            </select>
-          </label>
+          <>
+            <label>
+              모델
+              <select value={draft.model} onChange={(e) => setDraft({ ...draft, model: e.target.value })}>
+                {models.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <ToolPicker value={draft.tools} onChange={(tools) => setDraft({ ...draft, tools })} />
+          </>
         )}
         <ErrorText error={save.error ?? fire.error} />
         <div className="row between">

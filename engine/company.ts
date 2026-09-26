@@ -29,8 +29,10 @@ import {
 } from "./prompts";
 import { MemoryStore, type Store } from "./store";
 import {
+  AGENT_TOOLS,
   type ActionItem,
   type Agent,
+  type AgentTool,
   type CandidateProfile,
   type ChatMessage,
   type ChatThread,
@@ -51,6 +53,10 @@ import {
 const MAX_ACTIVITY = 200;
 /** Parallel polls per meeting step; Hermes rejects runs above its concurrency cap. */
 const MAX_CONCURRENT_POLLS = 4;
+
+function cleanTools(tools?: AgentTool[]): AgentTool[] {
+  return AGENT_TOOLS.filter((t) => tools?.includes(t));
+}
 
 export class EngineError extends Error {
   constructor(
@@ -326,7 +332,7 @@ export class Company {
         profileKey: input.hermes.profileKey?.trim() || undefined,
       };
     } else {
-      runtime = { kind: "claude", model: input.model || this.state.defaultModel };
+      runtime = { kind: "claude", model: input.model || this.state.defaultModel, tools: cleanTools(input.tools) };
     }
     const agent: Agent = {
       id: newId("agt"),
@@ -351,6 +357,7 @@ export class Company {
     agentId: string,
     patch: Partial<Pick<Agent, "name" | "role" | "persona" | "skills">> & {
       model?: string;
+      tools?: AgentTool[];
       hermes?: { profile?: string; profileKey?: string };
     },
   ): Agent {
@@ -360,6 +367,7 @@ export class Company {
     if (patch.persona !== undefined) agent.persona = patch.persona.trim();
     if (patch.skills) agent.skills = patch.skills.map((s) => s.trim()).filter(Boolean);
     if (patch.model && agent.runtime.kind === "claude") agent.runtime.model = patch.model;
+    if (patch.tools && agent.runtime.kind === "claude") agent.runtime.tools = cleanTools(patch.tools);
     if (patch.hermes && agent.runtime.kind === "hermes") {
       if (patch.hermes.profile?.trim()) agent.runtime.profile = patch.hermes.profile.trim();
       if (patch.hermes.profileKey !== undefined) agent.runtime.profileKey = patch.hermes.profileKey.trim() || undefined;
@@ -606,6 +614,10 @@ export class Company {
             reply.content += delta;
             this.emit({ type: "chat.delta", agentId: agent.id, messageId: reply.id, text: delta });
           },
+          onTool: (tool) => {
+            thread.activeTool = tool ?? undefined;
+            this.emit({ type: "chat.updated", thread });
+          },
         },
       );
     } catch (err) {
@@ -614,6 +626,7 @@ export class Company {
     } finally {
       reply.endedAt = now();
       thread.replying = false;
+      thread.activeTool = undefined;
       if (this.state.chats.includes(thread)) this.emit({ type: "chat.updated", thread });
       this.persist();
     }
@@ -817,7 +830,7 @@ export class Company {
   }
 
   private backendFor(agent: Agent): AgentBackend {
-    if (agent.runtime.kind === "claude") return new ClaudeBackend(this.llm, agent.runtime.model);
+    if (agent.runtime.kind === "claude") return new ClaudeBackend(this.llm, agent.runtime.model, agent.runtime.tools);
     const gateway = this.getGateway(agent.runtime.gatewayId);
     return new HermesBackend(
       new HermesClient({

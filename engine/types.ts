@@ -6,8 +6,13 @@ export type AgentStatus = "idle" | "working" | "in_meeting";
  * - `hermes`: the agent is a Hermes Agent profile on a registered gateway. Identity comes from
  *   the profile's own SOUL.md, and the agent has whatever tools, skills and memory the profile has.
  */
+/** Anthropic server tools a Claude employee may use: web search + fetch, and a code sandbox. */
+export type AgentTool = "web" | "code";
+
+export const AGENT_TOOLS: AgentTool[] = ["web", "code"];
+
 export type AgentRuntime =
-  | { kind: "claude"; model: string }
+  | { kind: "claude"; model: string; tools?: AgentTool[] }
   | { kind: "hermes"; gatewayId: string; profile: string; profileKey?: string; hasProfileKey?: boolean };
 
 export interface Agent {
@@ -202,6 +207,8 @@ export interface ChatThread {
   agentId: string;
   messages: ChatMessage[];
   replying: boolean;
+  /** Server tool the agent is using while replying. */
+  activeTool?: string;
 }
 
 export interface CompanyState {
@@ -239,6 +246,8 @@ export interface HireInput {
   skills?: string[];
   /** Claude agents: model id. Defaults to the company default. */
   model?: string;
+  /** Claude agents: server tools they may use. */
+  tools?: AgentTool[];
   /** Hermes agents: gateway + profile ("default" is the gateway's own profile). */
   hermes?: { gatewayId: string; profile?: string; profileKey?: string };
 }

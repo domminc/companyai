@@ -1,5 +1,6 @@
 import { HermesClient } from "./hermes";
 import type { LLM, LLMContext } from "./llm";
+import type { AgentTool } from "./types";
 
 type Effort = "low" | "medium" | "high";
 
@@ -25,11 +26,14 @@ export interface AgentBackend {
   run(turn: AgentTurn, cb?: TurnCallbacks): Promise<string>;
 }
 
+const TOOL_TURNS = new Set<LLMContext["kind"]>(["task", "chat", "review"]);
+
 export class ClaudeBackend implements AgentBackend {
   readonly kind = "claude";
   constructor(
     private llm: LLM,
     private model: string,
+    private tools: AgentTool[] = [],
   ) {}
 
   run(turn: AgentTurn, cb: TurnCallbacks = {}): Promise<string> {
@@ -40,8 +44,11 @@ export class ClaudeBackend implements AgentBackend {
         prompt: turn.prompt,
         effort: turn.effort,
         context: turn.context,
+        // Tools are for real work; a hand-raise poll or a meeting remark shouldn't go searching.
+        tools: TOOL_TURNS.has(turn.context.kind) ? this.tools : undefined,
       },
       (text) => cb.onDelta?.(text),
+      (tool) => cb.onTool?.(tool),
     );
   }
 }

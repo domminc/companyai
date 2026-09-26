@@ -11,7 +11,7 @@ export class ScriptedLLM implements LLM {
 
   constructor(private script: Script) {}
 
-  async streamText(req: TextRequest, onDelta: (text: string) => void): Promise<string> {
+  async streamText(req: TextRequest, onDelta: (text: string) => void, _onTool?: (tool: string | null) => void): Promise<string> {
     this.calls.push(req);
     const text = await this.script(req.context, req);
     onDelta(text);

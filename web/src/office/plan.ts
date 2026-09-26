@@ -152,9 +152,13 @@ export function planOverlays(state: CompanyState, errands: Map<string, Errand>):
         ? { text: `📝 "${clip(errand.title, 16)}" 검토 부탁드립니다`, tone: "report" }
         : { text: `✅ "${clip(errand.title, 16)}" 완료했습니다`, tone: "report" };
     } else if (state.chats?.find((c) => c.agentId === agent.id)?.replying) {
-      const reply = state.chats.find((c) => c.agentId === agent.id)!.messages.at(-1);
-      overlay.talking = true;
-      overlay.bubble = { text: `💬 ${reply?.content ? clip(reply.content, 80, true) : "…"}`, tone: "speech" };
+      const thread = state.chats.find((c) => c.agentId === agent.id)!;
+      const reply = thread.messages.at(-1);
+      overlay.talking = !thread.activeTool;
+      overlay.typing = !!thread.activeTool;
+      overlay.bubble = thread.activeTool
+        ? { text: `🔧 ${clip(thread.activeTool, 40)}`, tone: "work" }
+        : { text: `💬 ${reply?.content ? clip(reply.content, 80, true) : "…"}`, tone: "speech" };
     } else if (agent.status === "working" && state.tasks.some((t) => t.reviewing && t.review.reviewerId === agent.id)) {
       const task = state.tasks.find((t) => t.reviewing && t.review.reviewerId === agent.id)!;
       overlay.typing = true;

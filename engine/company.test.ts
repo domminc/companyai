@@ -15,7 +15,7 @@ test("hiring adds an idle agent with the default model", async () => {
   const state = company.snapshot();
   assert.equal(state.agents.length, 1);
   assert.equal(agent.status, "idle");
-  assert.deepEqual(agent.runtime, { kind: "claude", model: state.defaultModel });
+  assert.deepEqual(agent.runtime, { kind: "claude", model: state.defaultModel, tools: [] });
   assert.throws(() => company.hire({ name: "", role: "PM" }), EngineError);
 });
 

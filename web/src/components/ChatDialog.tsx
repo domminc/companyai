@@ -91,6 +91,7 @@ export function ChatDialog({ agentId, state, onClose }: { agentId: string; state
                   ) : (
                     <div className="pre">{m.content}</div>
                   )}
+                  {streaming && thread?.activeTool && <span className="tool-chip">🔧 {thread.activeTool}</span>}
                   {streaming && <span className="cursor" />}
                   <div className="row between chat-meta">
                     <span className="muted small">{timeAgo(m.at)}</span>
