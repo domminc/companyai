@@ -12,7 +12,7 @@ import { KenneyAvatar, loadModel, modelFor } from "./kenney";
 import { buildOffice, disposeTree, type OfficeModel, setScreen } from "./furniture";
 import { buildLayout, type OfficeLayout, type Spot, type Vec2 } from "./layout";
 import { WalkGrid } from "./pathfinding";
-import { deskAssignments, type Errand, type Goal, type Overlay, planGoals, planOverlays } from "./plan";
+import { deskAssignments, type Errand, type Goal, type Overlay, planBossGoal, planGoals, planOverlays } from "./plan";
 
 export type CameraView = "overview" | "meeting" | "follow";
 
@@ -163,8 +163,10 @@ export class OfficeScene {
     // A task that just finished sends its owner over to report.
     for (const task of state.tasks) {
       const before = this.taskStatus.get(task.id);
-      if (this.initialized && before === "in_progress" && task.status === "done" && task.assigneeId) {
-        this.errands.set(task.assigneeId, { kind: "report", title: task.title, since: now });
+      // Finished work, or work that 대표 has to review: walk over to 대표's desk.
+      const finished = before === "in_progress" && (task.status === "done" || (task.status === "review" && task.review.mode === "human"));
+      if (this.initialized && finished && task.assigneeId) {
+        this.errands.set(task.assigneeId, { kind: "report", title: task.title, since: now, review: task.status === "review" });
       }
       this.taskStatus.set(task.id, task.status);
     }
@@ -205,6 +207,7 @@ export class OfficeScene {
   dispose() {
     this.disposed = true;
     cancelAnimationFrame(this.raf);
+    clearInterval(this.background);
     this.resize.disconnect();
     this.renderer.domElement.removeEventListener("pointerdown", this.onPointerDown);
     this.renderer.domElement.removeEventListener("pointerup", this.onPointerUp);
@@ -243,6 +246,7 @@ export class OfficeScene {
     cam.updateProjectionMatrix();
 
     this.placeStatic(this.boss, layout.boss.seat);
+    this.boss.goal = undefined;
     for (const a of this.actors.values()) a.goal = undefined; // re-plan onto the new floor
     if (first) {
       const shot = this.overviewShot();
@@ -375,6 +379,15 @@ export class OfficeScene {
       actor.bubbleEl.style.translate = `0 ${-stacked * 38}px`;
     }
     this.setBubble(this.boss, overlays.boss ? { text: overlays.boss, tone: "speech" } : undefined);
+    // 대표 walks to the meeting room after joining, and back to the desk after.
+    const bossGoal = planBossGoal(this.state, this.layout);
+    if (bossGoal.key !== this.boss.goal?.key) {
+      this.boss.goal = bossGoal;
+      this.boss.path = this.grid.findPath(this.boss.pos, bossGoal.spot).slice(1);
+      this.boss.arrivedAt = undefined;
+    }
+    const bossTalking = !!overlays.boss;
+    this.boss.overlay = { talking: bossTalking, typing: bossGoal.pose === "sit" && !bossTalking, handRaised: false };
 
     // Screens glow at desks whose owner is working.
     const desks = deskAssignments(this.state.agents);
@@ -492,6 +505,47 @@ export class OfficeScene {
     return new THREE.Vector3(table.x, 0.6, table.z);
   }
 
+  /**
+   * Hidden (another tab is open): stop drawing, but keep the office going at a low tick rate so
+   * people are where they should be when you come back.
+   */
+  setActive(active: boolean) {
+    if (active === this.active) return;
+    this.active = active;
+    cancelAnimationFrame(this.raf);
+    clearInterval(this.background);
+    if (active) {
+      this.onResize();
+      this.loop();
+    } else {
+      this.background = setInterval(() => {
+        this.timer.update();
+        this.simulate(this.timer.getDelta(), this.timer.getElapsed(), performance.now());
+      }, 200);
+    }
+  }
+
+  private active = true;
+  private background?: ReturnType<typeof setInterval>;
+
+  private simulate(delta: number, t: number, now: number) {
+    // Long gaps (a throttled background tab) are walked in steps so nobody cuts through walls.
+    let remaining = Math.min(delta, 5);
+    do {
+      const dt = Math.min(remaining, 0.1);
+      remaining -= dt;
+      this.tickErrands(now);
+      for (const [id, actor] of this.actors) {
+        this.stepActor(actor, dt, t, now);
+        if (actor.leaving && actor.path.length === 0) {
+          this.removeActor(actor);
+          this.actors.delete(id);
+        }
+      }
+      this.stepActor(this.boss, dt, t, now);
+    } while (remaining > 1e-6);
+  }
+
   private loop = () => {
     this.raf = requestAnimationFrame(this.loop);
     this.timer.update();
@@ -499,16 +553,11 @@ export class OfficeScene {
     const t = this.timer.getElapsed();
     const now = performance.now();
 
-    this.tickErrands(now);
-    for (const [id, actor] of this.actors) {
-      this.stepActor(actor, dt, t, now);
-      if (actor.leaving && actor.path.length === 0) {
-        this.removeActor(actor);
-        this.actors.delete(id);
-      }
-    }
-    this.boss.character.animate(dt, t, { moving: false, sitting: true, typing: !this.boss.bubble.visible, talking: this.boss.bubble.visible, handRaised: false });
+    this.simulate(dt, t, now);
+    this.drawFrame(dt);
+  };
 
+  private drawFrame(dt: number) {
     if (this.view === "follow") {
       const target = this.followTarget();
       if (target) this.tween = { target, distance: 11 };
@@ -529,7 +578,7 @@ export class OfficeScene {
     this.controls.update();
     this.renderer.render(this.scene, this.camera);
     this.labels.render(this.scene, this.camera);
-  };
+  }
 
   private onResize() {
     const w = Math.max(1, this.container.clientWidth);

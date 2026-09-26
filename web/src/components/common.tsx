@@ -28,6 +28,7 @@ const STATUS_LABEL: Record<string, string> = {
   in_meeting: "회의 중",
   todo: "할 일",
   in_progress: "진행 중",
+  review: "검토",
   done: "완료",
   failed: "실패",
   scheduled: "대기 중",

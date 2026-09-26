@@ -2,11 +2,23 @@ import { useEffect, useRef, useState } from "react";
 import { api, type CompanyState, type ModelOption } from "../api";
 import { type CameraView, OfficeScene, webglAvailable } from "../office/scene";
 import { Avatar, ErrorText, StatusBadge, useAction } from "./common";
+import { ChatDialog } from "./ChatDialog";
 import { RuntimeBadge } from "./TeamView";
 
 type Tab = "office" | "team" | "tasks" | "meetings";
 
-export function OfficeView({ state, models, onNavigate }: { state: CompanyState; models: ModelOption[]; onNavigate: (tab: Tab) => void }) {
+export function OfficeView({
+  state,
+  models,
+  onNavigate,
+  active = true,
+}: {
+  state: CompanyState;
+  models: ModelOption[];
+  onNavigate: (tab: Tab) => void;
+  /** False while another tab is showing: the scene keeps simulating but stops drawing. */
+  active?: boolean;
+}) {
   const host = useRef<HTMLDivElement>(null);
   const scene = useRef<OfficeScene | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -43,6 +55,10 @@ export function OfficeView({ state, models, onNavigate }: { state: CompanyState;
     scene.current?.select(selected);
   }, [selected]);
 
+  useEffect(() => {
+    scene.current?.setActive(active);
+  }, [active]);
+
   const changeView = (v: CameraView) => {
     setView(v);
     scene.current?.setView(v);
@@ -51,6 +67,8 @@ export function OfficeView({ state, models, onNavigate }: { state: CompanyState;
   const meeting = state.meetings.find((m) => m.status === "running");
   const working = state.agents.filter((a) => a.status === "working").length;
   const agent = state.agents.find((a) => a.id === selected);
+  const [chatWith, setChatWith] = useState<string | null>(null);
+  const reviewsForMe = state.tasks.filter((t) => t.status === "review" && t.review.mode === "human" && !t.reviewing).length;
   const speaker = meeting?.currentSpeakerId ? state.agents.find((a) => a.id === meeting.currentSpeakerId) : undefined;
 
   useEffect(() => {
@@ -85,6 +103,16 @@ export function OfficeView({ state, models, onNavigate }: { state: CompanyState;
           ) : (
             <span className="hud-chip">회의실 비어 있음</span>
           )}
+          {meeting && (
+            <button className="hud-chip" onClick={() => api.joinMeeting(meeting.id, !meeting.userJoined)}>
+              {meeting.userJoined ? "🪑 자리로 돌아가기" : "🚪 회의 참석"}
+            </button>
+          )}
+          {reviewsForMe > 0 && (
+            <button className="hud-chip attention" onClick={() => onNavigate("tasks")}>
+              📝 검토 요청 {reviewsForMe}건
+            </button>
+          )}
         </div>
         <div className="office-views">
           <button className={view === "overview" ? "active" : ""} onClick={() => changeView("overview")}>
@@ -106,7 +134,18 @@ export function OfficeView({ state, models, onNavigate }: { state: CompanyState;
           </div>
         )}
         <p className="office-hint">드래그로 회전 · 우클릭 드래그로 이동 · 휠로 확대 · 직원을 클릭하면 상세</p>
-        {agent && <AgentPanel key={agent.id} agentId={agent.id} state={state} models={models} onClose={() => setSelected(null)} onNavigate={onNavigate} />}
+        {agent && (
+          <AgentPanel
+            key={agent.id}
+            agentId={agent.id}
+            state={state}
+            models={models}
+            onClose={() => setSelected(null)}
+            onNavigate={onNavigate}
+            onChat={() => setChatWith(agent.id)}
+          />
+        )}
+        {chatWith && <ChatDialog agentId={chatWith} state={state} onClose={() => setChatWith(null)} />}
       </div>
     </section>
   );
@@ -118,12 +157,14 @@ function AgentPanel({
   models,
   onClose,
   onNavigate,
+  onChat,
 }: {
   agentId: string;
   state: CompanyState;
   models: ModelOption[];
   onClose: () => void;
   onNavigate: (tab: Tab) => void;
+  onChat: () => void;
 }) {
   const agent = state.agents.find((a) => a.id === agentId)!;
   const [title, setTitle] = useState("");
@@ -169,7 +210,7 @@ function AgentPanel({
         onSubmit={(e) => {
           e.preventDefault();
           create.run(async () => {
-            await api.createTask({ title, assigneeId: agent.id });
+            await api.createTask({ title, assigneeId: agent.id, review: { mode: "human" } });
             setTitle("");
           });
         }}
@@ -180,9 +221,14 @@ function AgentPanel({
         </label>
         <ErrorText error={create.error} />
         <div className="row between">
-          <button type="button" className="btn ghost small" onClick={() => onNavigate("team")}>
-            프로필
-          </button>
+          <div className="row tight">
+            <button type="button" className="btn ghost small" onClick={() => onNavigate("team")}>
+              프로필
+            </button>
+            <button type="button" className="btn small" onClick={onChat}>
+              💬 대화
+            </button>
+          </div>
           <button className="btn primary small" disabled={!title.trim() || create.busy}>
             지시하기
           </button>

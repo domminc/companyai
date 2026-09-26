@@ -42,6 +42,8 @@ export interface OfficeLayout {
     room: { x: number; z: number; w: number; d: number };
     table: { x: number; z: number; rx: number; rz: number };
     seats: Spot[];
+    /** Where 대표 stands when joining: at the whiteboard, facing the table. */
+    hostSpot: Spot;
     /** Opening in the room's front wall. */
     doorX: number;
     doorWidth: number;
@@ -109,6 +111,7 @@ export function buildLayout(agentCount: number): OfficeLayout {
     const z = table.z + Math.sin(angle) * (table.rz + 0.65);
     seats.push({ x, z, facing: facingTowards({ x, z }, table) });
   }
+  const hostSpot: Spot = { x: room.x, z: z0 + 0.75, facing: FACING_FRONT };
   const doorWidth = 1.4;
   const doorX = x0 + MEETING_W - 1.2;
   const wall = 0.12;
@@ -163,7 +166,7 @@ export function buildLayout(agentCount: number): OfficeLayout {
     entrance,
     desks,
     boss,
-    meeting: { room, table, seats, doorX, doorWidth },
+    meeting: { room, table, seats, hostSpot, doorX, doorWidth },
     lounge: { area, spots, sofas, table: loungeTable },
     plants,
     obstacles,

@@ -47,6 +47,21 @@ export function reduce(state: CompanyState | null, event: CompanyEvent): Company
               },
         ),
       };
+    case "chat.updated": {
+      const others = state.chats.filter((c) => c.agentId !== event.thread.agentId);
+      return { ...state, chats: [...others, event.thread] };
+    }
+    case "chat.cleared":
+      return { ...state, chats: state.chats.filter((c) => c.agentId !== event.agentId) };
+    case "chat.delta":
+      return {
+        ...state,
+        chats: state.chats.map((c) =>
+          c.agentId !== event.agentId
+            ? c
+            : { ...c, messages: c.messages.map((m) => (m.id === event.messageId ? { ...m, content: m.content + event.text } : m)) },
+        ),
+      };
     case "activity":
       return { ...state, activity: [...state.activity, event.entry].slice(-200) };
   }

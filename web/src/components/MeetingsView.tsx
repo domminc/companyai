@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { api, type Agent, type CompanyState, type Meeting, type MeetingEntry, USER_SPEAKER } from "../api";
+import { api, type Agent, type CompanyState, type Meeting, type MeetingEntry, type TaskReview, USER_SPEAKER } from "../api";
+import { ReviewPicker } from "./TasksView";
 import { Avatar, ErrorText, Markdown, Modal, StatusBadge, timeAgo, useAction } from "./common";
 
 const USER_NAME = "대표";
@@ -172,6 +173,14 @@ function MeetingRoom({ meeting, state }: { meeting: Meeting; state: CompanyState
         <div ref={bottom} />
       </div>
 
+      {canInteract && (
+        <div className="row between join-row">
+          <span className="muted small">{meeting.userJoined ? "🪑 대표님이 회의실에 있습니다" : "대표님은 자리에서 회의를 보고 있습니다"}</span>
+          <button className="btn small" disabled={action.busy} onClick={() => action.run(() => api.joinMeeting(meeting.id, !meeting.userJoined))}>
+            {meeting.userJoined ? "자리로 돌아가기" : "회의실 들어가기"}
+          </button>
+        </div>
+      )}
       {canInteract && <Composer meeting={meeting} participants={meeting.participantIds.map(agentOf).filter((a): a is Agent => !!a)} />}
 
       {meeting.status === "done" && <Minutes meeting={meeting} state={state} />}
@@ -306,7 +315,6 @@ function Composer({ meeting, participants }: { meeting: Meeting; participants: A
 }
 
 function Minutes({ meeting, state }: { meeting: Meeting; state: CompanyState }) {
-  const action = useAction();
   return (
     <div className="minutes">
       <h4>회의록</h4>
@@ -321,26 +329,43 @@ function Minutes({ meeting, state }: { meeting: Meeting; state: CompanyState }) 
           </ul>
         </>
       )}
-      <h4>액션 아이템</h4>
-      {meeting.actionItems.length === 0 && <p className="muted">없음</p>}
+      {meeting.outcome === "draft" ? <OutcomeDraft meeting={meeting} state={state} /> : <OutcomeList meeting={meeting} state={state} />}
+    </div>
+  );
+}
+
+function OutcomeList({ meeting, state }: { meeting: Meeting; state: CompanyState }) {
+  const action = useAction();
+  const items = meeting.actionItems.filter((i) => meeting.outcome !== "registered" || i.include);
+  return (
+    <>
+      <h4>액션 아이템 {meeting.outcome === "registered" && <span className="muted small">· 업무로 등록됨</span>}</h4>
+      {items.length === 0 && <p className="muted">없음</p>}
       <ul className="action-items">
         {meeting.actionItems.map((item, i) => {
+          if (meeting.outcome === "registered" && !item.include) return null;
           const task = state.tasks.find((t) => t.id === item.taskId);
           const owner = state.agents.find((a) => a.id === item.assigneeId);
           return (
             <li key={i} className="action-item">
               <div>
-                <strong>{item.title}</strong>
+                <strong>
+                  {i + 1}. {item.title}
+                </strong>
                 <p className="muted small">{item.description}</p>
+                {item.acceptance && <p className="small">완료 조건: {item.acceptance}</p>}
+                {item.after.length > 0 && <p className="muted small">선행: {item.after.map((j) => `#${j + 1}`).join(", ")}</p>}
               </div>
               <div className="row tight">
                 {owner && <Avatar agent={owner} size={22} />}
                 {task ? (
                   <StatusBadge status={task.status} />
                 ) : (
-                  <button className="btn small" disabled={action.busy} onClick={() => action.run(() => api.promoteActionItem(meeting.id, i))}>
-                    업무로 만들기
-                  </button>
+                  meeting.outcome !== "registered" && (
+                    <button className="btn small" disabled={action.busy} onClick={() => action.run(() => api.promoteActionItem(meeting.id, i))}>
+                      업무로 만들기
+                    </button>
+                  )
                 )}
               </div>
             </li>
@@ -348,6 +373,68 @@ function Minutes({ meeting, state }: { meeting: Meeting; state: CompanyState }) 
         })}
       </ul>
       <ErrorText error={action.error} />
+    </>
+  );
+}
+
+/** The meeting's proposed follow-ups, for 대표 to edit and register (DeskRPG-style draft review). */
+function OutcomeDraft({ meeting, state }: { meeting: Meeting; state: CompanyState }) {
+  const [items, setItems] = useState(() =>
+    meeting.actionItems.map((i) => ({ title: i.title, description: i.description, acceptance: i.acceptance, assigneeId: i.assigneeId, include: i.include })),
+  );
+  const [review, setReview] = useState<TaskReview>({ mode: "human" });
+  const action = useAction();
+  const edit = (i: number, patch: Partial<(typeof items)[number]>) => setItems((all) => all.map((x, j) => (j === i ? { ...x, ...patch } : x)));
+  const kept = items.filter((i) => i.include && i.title.trim()).length;
+
+  return (
+    <div className="outcome-draft">
+      <div className="row between">
+        <h4>액션 아이템 초안</h4>
+        <span className="muted small">검토하고 고친 뒤 등록하면 업무가 됩니다. 선행 항목이 끝나야 다음 항목이 시작됩니다.</span>
+      </div>
+      <ol className="draft-items">
+        {meeting.actionItems.map((original, i) => {
+          const item = items[i];
+          const droppedDeps = original.after.filter((j) => !items[j]?.include);
+          return (
+            <li key={i} className={`draft-item ${item.include ? "" : "off"}`}>
+              <div className="row tight">
+                <input type="checkbox" className="check" checked={item.include} onChange={(e) => edit(i, { include: e.target.checked })} aria-label="등록에 포함" />
+                <span className="muted small">#{i + 1}</span>
+                <input className="grow" value={item.title} onChange={(e) => edit(i, { title: e.target.value })} disabled={!item.include} />
+                <select value={item.assigneeId ?? ""} onChange={(e) => edit(i, { assigneeId: e.target.value || null })} disabled={!item.include}>
+                  <option value="">미배정</option>
+                  {state.agents.map((a) => (
+                    <option key={a.id} value={a.id}>
+                      {a.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              {item.include && (
+                <div className="draft-detail">
+                  <textarea rows={2} value={item.description} onChange={(e) => edit(i, { description: e.target.value })} />
+                  <input value={item.acceptance} placeholder="완료 조건" onChange={(e) => edit(i, { acceptance: e.target.value })} />
+                  {original.after.length > 0 && (
+                    <p className="muted small">
+                      선행: {original.after.map((j) => `#${j + 1}`).join(", ")}
+                      {droppedDeps.length > 0 && " (빠진 선행 항목은 무시됩니다)"}
+                    </p>
+                  )}
+                </div>
+              )}
+            </li>
+          );
+        })}
+      </ol>
+      <ReviewPicker state={state} value={review} onChange={setReview} />
+      <ErrorText error={action.error} />
+      <div className="row end">
+        <button className="btn primary" disabled={action.busy || kept === 0} onClick={() => action.run(() => api.registerOutcome(meeting.id, { items, review }))}>
+          업무 {kept}건 등록
+        </button>
+      </div>
     </div>
   );
 }
@@ -366,7 +453,7 @@ function NewMeetingDialog({
   // Selection order matters: the first participant chairs.
   const [participants, setParticipants] = useState<string[]>(state.agents.map((a) => a.id));
   const [turns, setTurns] = useState(3);
-  const [createTasks, setCreateTasks] = useState(true);
+  const [createTasks, setCreateTasks] = useState(false);
   const create = useAction();
 
   const toggle = (id: string) => setParticipants((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
@@ -432,7 +519,7 @@ function NewMeetingDialog({
           </label>
           <label className="checkbox">
             <input type="checkbox" checked={createTasks} onChange={(e) => setCreateTasks(e.target.checked)} />
-            끝나면 액션 아이템을 업무로 자동 배정
+            초안 검토 없이 끝나자마자 업무로 배정
           </label>
         </div>
         <ErrorText error={create.error} />

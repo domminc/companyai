@@ -26,8 +26,10 @@ export function App() {
     return TABS.some((t) => t.id === fromHash) ? fromHash : "office";
   });
 
+  const [officeOpened, setOfficeOpened] = useState(tab === "office");
   useEffect(() => {
     history.replaceState(null, "", `#${tab}`);
+    if (tab === "office") setOfficeOpened(true);
   }, [tab]);
 
   if (!state) {
@@ -54,10 +56,13 @@ export function App() {
       </nav>
       <div className="layout">
         <main>
-          {tab === "office" && (
-            <Suspense fallback={<div className="office-stage loading">3D 오피스를 불러오는 중…</div>}>
-              <OfficeView state={state} models={models} onNavigate={setTab} />
-            </Suspense>
+          {/* Once opened, the office stays mounted so people keep their places across tabs. */}
+          {officeOpened && (
+            <div hidden={tab !== "office"}>
+              <Suspense fallback={<div className="office-stage loading">3D 오피스를 불러오는 중…</div>}>
+                <OfficeView state={state} models={models} onNavigate={setTab} active={tab === "office"} />
+              </Suspense>
+            </div>
           )}
           {tab === "team" && <TeamView state={state} models={models} />}
           {tab === "tasks" && <TasksView state={state} />}

@@ -63,12 +63,20 @@ route("POST", "/api/tasks", ({ body }) => company.createTask(body));
 route("PATCH", "/api/tasks/:id", ({ params, body }) => company.updateTask(params.id, body));
 route("POST", "/api/tasks/:id/retry", ({ params }) => company.retryTask(params.id));
 route("DELETE", "/api/tasks/:id", ({ params }) => (company.deleteTask(params.id), { ok: true }));
+route("POST", "/api/tasks/:id/review", ({ params, body }) =>
+  company.reviewTask(params.id, { approve: body.approve === true, comment: body.comment }),
+);
+
+route("POST", "/api/chats/:agentId", ({ params, body }) => company.chat(params.agentId, String(body.content ?? "")));
+route("DELETE", "/api/chats/:agentId", ({ params }) => (company.clearChat(params.agentId), { ok: true }));
 
 route("POST", "/api/meetings", ({ body }) => company.startMeeting(body));
 route("POST", "/api/meetings/:id/cancel", ({ params }) => company.cancelMeeting(params.id));
 route("POST", "/api/meetings/:id/messages", ({ params, body }) => company.postMeetingMessage(params.id, String(body.content ?? "")));
 route("POST", "/api/meetings/:id/grant", ({ params, body }) => company.grantFloor(params.id, String(body.agentId ?? "")));
 route("POST", "/api/meetings/:id/end", ({ params }) => company.endMeeting(params.id));
+route("POST", "/api/meetings/:id/join", ({ params, body }) => company.joinMeeting(params.id, body.joined !== false));
+route("POST", "/api/meetings/:id/outcome", ({ params, body }) => company.registerOutcome(params.id, body));
 route("POST", "/api/meetings/:id/action-items/:index/promote", ({ params }) =>
   company.promoteActionItem(params.id, Number(params.index)),
 );

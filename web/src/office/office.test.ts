@@ -3,7 +3,7 @@ import { test } from "node:test";
 import type { Agent, CompanyState, Meeting } from "../../../engine/types";
 import { buildLayout, DESK_D, DESK_W, type Vec2 } from "./layout";
 import { WalkGrid } from "./pathfinding";
-import { deskAssignments, type Errand, planGoals, planOverlays } from "./plan";
+import { deskAssignments, type Errand, planBossGoal, planGoals, planOverlays } from "./plan";
 
 function agent(id: string, status: Agent["status"] = "idle", hiredAt = `2026-01-01T00:00:0${id.length}Z`): Agent {
   return {
@@ -20,7 +20,7 @@ function agent(id: string, status: Agent["status"] = "idle", hiredAt = `2026-01-
 }
 
 function state(agents: Agent[], extra: Partial<CompanyState> = {}): CompanyState {
-  return { name: "c", mission: "", defaultModel: "m", gateways: [], agents, tasks: [], meetings: [], activity: [], ...extra };
+  return { name: "c", mission: "", defaultModel: "m", gateways: [], agents, tasks: [], meetings: [], chats: [], activity: [], ...extra };
 }
 
 function meeting(partial: Partial<Meeting>): Meeting {
@@ -38,6 +38,7 @@ function meeting(partial: Partial<Meeting>): Meeting {
     decisions: [],
     actionItems: [],
     autoCreateTasks: true,
+    outcome: "none",
     createdAt: "",
     ...partial,
   };
@@ -66,6 +67,7 @@ test("every seat, desk and the report spot can be reached from the entrance", ()
       ...layout.lounge.spots,
       layout.boss.reportSpot,
       layout.boss.seat,
+      layout.meeting.hostSpot,
     ];
     for (const t of targets) {
       const path = grid.findPath(layout.entrance, t);
@@ -131,7 +133,7 @@ test("goals follow status: meeting seats by participant order, reports, breaks, 
 test("overlays show the speaker's words, waiting hands, work and 대표's remarks", () => {
   const s = state([agent("a", "in_meeting"), agent("bb", "in_meeting"), agent("ccc", "working")], {
     tasks: [
-      { id: "t", title: "시장 조사 보고서 작성하기", description: "", assigneeId: "ccc", status: "in_progress", output: "", activeTool: "web_search", createdAt: "", updatedAt: "" },
+      { id: "t", title: "시장 조사 보고서 작성하기", description: "", assigneeId: "ccc", status: "in_progress", output: "", activeTool: "web_search", dependsOn: [], review: { mode: "none" }, revision: 0, reviews: [], createdAt: "", updatedAt: "" },
     ],
     meetings: [
       meeting({
@@ -153,4 +155,54 @@ test("overlays show the speaker's words, waiting hands, work and 대표's remark
   assert.equal(agents.get("a")!.handRaised, false);
   assert.deepEqual(agents.get("ccc")!.bubble, { text: "🔧 web_search", tone: "work" });
   assert.equal(boss, undefined, "대표 spoke before the current speaker");
+});
+
+test("대표 goes to the whiteboard of a meeting they joined, otherwise sits at their desk", () => {
+  const layout = buildLayout(3);
+  const s = state([agent("a", "in_meeting"), agent("bb", "in_meeting")], { meetings: [meeting({ participantIds: ["a", "bb"] })] });
+  assert.equal(planBossGoal(s, layout).key, "boss-desk");
+  s.meetings[0].userJoined = true;
+  const goal = planBossGoal(s, layout);
+  assert.deepEqual(goal.spot, layout.meeting.hostSpot);
+  assert.equal(goal.pose, "stand");
+  s.meetings[0].status = "done";
+  assert.equal(planBossGoal(s, layout).key, "boss-desk");
+});
+
+test("overlays: a reviewer shows what they review, a chatting employee shows their reply", () => {
+  const task = {
+    id: "t", title: "보도자료", description: "", assigneeId: "a", status: "review" as const, output: "초안",
+    dependsOn: [], review: { mode: "agent" as const, reviewerId: "bb" }, revision: 0, reviews: [], reviewing: true,
+    createdAt: "", updatedAt: "",
+  };
+  const s = state([agent("a"), agent("bb", "working"), agent("ccc")], {
+    tasks: [task],
+    chats: [{ agentId: "ccc", replying: true, messages: [{ id: "m", from: "agent", content: "네 대표님, 바로 확인하겠습니다", at: "" }] }],
+  });
+  const errands = new Map<string, Errand>([["a", { kind: "report", title: "보도자료", since: 1, review: true }]]);
+  const { agents } = planOverlays(s, errands);
+  assert.deepEqual(agents.get("bb")!.bubble, { text: "🔍 보도자료 검토", tone: "work" });
+  assert.deepEqual(agents.get("ccc")!.bubble, { text: "💬 네 대표님, 바로 확인하겠습니다", tone: "speech" });
+  assert.equal(agents.get("ccc")!.talking, true);
+  assert.match(agents.get("a")!.bubble!.text, /검토 부탁드립니다/);
+});
+
+test("대표 talking over the current speaker doesn't put 대표's words in the speaker's bubble", () => {
+  const s = state([agent("a", "in_meeting"), agent("bb", "in_meeting")], {
+    meetings: [
+      meeting({
+        participantIds: ["a", "bb"],
+        userJoined: true,
+        phase: "speaking",
+        currentSpeakerId: "a",
+        transcript: [
+          { kind: "speech", id: "s1", speakerId: "a", content: "제 생각에는", via: "hand", at: "" },
+          { kind: "speech", id: "s2", speakerId: "user", content: "@bb 의견도 듣고 싶어요", via: "user", at: "", endedAt: "" },
+        ],
+      }),
+    ],
+  });
+  const { agents, boss } = planOverlays(s, new Map());
+  assert.equal(agents.get("a")!.bubble!.text, "제 생각에는");
+  assert.equal(boss, "@bb 의견도 듣고 싶어요");
 });

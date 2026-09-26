@@ -17,7 +17,7 @@ export interface Goal {
 
 /** Short-lived things the office does on its own: walking over to report, a coffee break. */
 export type Errand =
-  | { kind: "report"; title: string; since: number }
+  | { kind: "report"; title: string; since: number; /** Asking 대표 to review rather than reporting done. */ review?: boolean }
   | { kind: "break"; spot: number; until: number };
 
 export type BubbleTone = "speech" | "work" | "report" | "think" | "note";
@@ -89,10 +89,11 @@ function clip(text: string, max: number, fromEnd = false): string {
   return fromEnd ? `…${t.slice(-max)}` : `${t.slice(0, max)}…`;
 }
 
-function lastSpeech(meeting: Meeting): SpeechEntry | undefined {
+/** The latest speech, optionally by one speaker (대표 can talk over the current speaker). */
+function lastSpeech(meeting: Meeting, speakerId?: string): SpeechEntry | undefined {
   for (let i = meeting.transcript.length - 1; i >= 0; i--) {
     const e = meeting.transcript[i];
-    if (e.kind === "speech") return e;
+    if (e.kind === "speech" && (!speakerId || e.speakerId === speakerId)) return e;
   }
   return undefined;
 }
@@ -118,6 +119,13 @@ export interface Overlays {
   boss?: string;
 }
 
+/** 대표 sits at the big desk, or stands at the meeting-room whiteboard after joining a meeting. */
+export function planBossGoal(state: CompanyState, layout: OfficeLayout): Goal {
+  const meeting = runningMeetings(state).find((m) => m.userJoined);
+  if (meeting) return { key: `host:${meeting.id}`, spot: layout.meeting.hostSpot, pose: "stand", activity: "meeting" };
+  return { key: "boss-desk", spot: layout.boss.seat, pose: "sit", activity: "idle" };
+}
+
 export function planOverlays(state: CompanyState, errands: Map<string, Errand>): Overlays {
   const agents = new Map<string, Overlay>();
   const meetings = runningMeetings(state);
@@ -130,7 +138,7 @@ export function planOverlays(state: CompanyState, errands: Map<string, Errand>):
 
     if (meeting && agent.status === "in_meeting") {
       if (meeting.phase === "speaking" && meeting.currentSpeakerId === agent.id) {
-        const speech = lastSpeech(meeting);
+        const speech = lastSpeech(meeting, agent.id);
         overlay.talking = true;
         overlay.bubble = { text: speech?.content ? clip(speech.content, 90, true) : "…", tone: "speech" };
       } else if (meeting.phase === "polling") {
@@ -140,7 +148,17 @@ export function planOverlays(state: CompanyState, errands: Map<string, Errand>):
       }
       overlay.handRaised = waitingHands(meeting).has(agent.id);
     } else if (errand?.kind === "report") {
-      overlay.bubble = { text: `✅ "${clip(errand.title, 16)}" 완료했습니다`, tone: "report" };
+      overlay.bubble = errand.review
+        ? { text: `📝 "${clip(errand.title, 16)}" 검토 부탁드립니다`, tone: "report" }
+        : { text: `✅ "${clip(errand.title, 16)}" 완료했습니다`, tone: "report" };
+    } else if (state.chats?.find((c) => c.agentId === agent.id)?.replying) {
+      const reply = state.chats.find((c) => c.agentId === agent.id)!.messages.at(-1);
+      overlay.talking = true;
+      overlay.bubble = { text: `💬 ${reply?.content ? clip(reply.content, 80, true) : "…"}`, tone: "speech" };
+    } else if (agent.status === "working" && state.tasks.some((t) => t.reviewing && t.review.reviewerId === agent.id)) {
+      const task = state.tasks.find((t) => t.reviewing && t.review.reviewerId === agent.id)!;
+      overlay.typing = true;
+      overlay.bubble = { text: `🔍 ${clip(task.title, 14)} 검토`, tone: "work" };
     } else if (agent.status === "working") {
       const task = state.tasks.find((t) => t.assigneeId === agent.id && t.status === "in_progress");
       overlay.typing = true;

@@ -60,7 +60,13 @@ export function defaultFakeReply(): (req: FakeRunRequest) => FakeReply {
       return JSON.stringify({
         summary: "Hermes 서기가 정리한 회의록입니다.",
         decisions: ["2주 안에 1차 결과를 공유한다"],
-        actionItems: ids.map(([, id, name]) => ({ title: `${name} 후속 작업`, description: "회의 결정사항 실행", assigneeId: id })),
+        actionItems: ids.map(([, id, name], i) => ({
+          title: `${name} 후속 작업`,
+          description: "회의 결정사항 실행",
+          acceptance: "결정사항별 실행 계획과 일정 포함",
+          assigneeId: id,
+          after: i === 0 ? [] : [0],
+        })),
       });
     }
     return { tool: "web_search", text: `## 결과 (Hermes ${req.profile})\n\n요청한 작업을 도구로 조사해 정리했습니다.` };

@@ -387,6 +387,10 @@ button.card:hover {
   background: color-mix(in srgb, var(--warn) 15%, transparent);
   color: var(--warn);
 }
+.badge-review {
+  background: color-mix(in srgb, #0ea5e9 15%, transparent);
+  color: #0284c7;
+}
 .badge-done {
   background: color-mix(in srgb, var(--ok) 15%, transparent);
   color: var(--ok);
@@ -586,8 +590,13 @@ button.card:hover {
 
 .kanban {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 12px;
+}
+@media (max-width: 1250px) {
+  .kanban {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
 }
 @media (max-width: 900px) {
   .kanban {
@@ -1303,4 +1312,158 @@ button.card:hover {
 }
 .tight-stack {
   gap: 8px;
+}
+
+/* ------------------------------------------------ review, drafts, chat */
+
+.attention {
+  color: #b45309;
+}
+.tag-chip {
+  font-size: 11px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--muted);
+  border: 0;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.tag-chip.attention {
+  background: color-mix(in srgb, var(--warn) 18%, transparent);
+  color: #b45309;
+}
+.tag-chip.ok {
+  background: color-mix(in srgb, var(--ok) 15%, transparent);
+  color: var(--ok);
+}
+.tag-chip.wait {
+  background: color-mix(in srgb, var(--muted) 15%, transparent);
+}
+.tag-chip.link {
+  cursor: pointer;
+}
+.task-card.status-review {
+  border-left: 3px solid #0ea5e9;
+}
+.acceptance {
+  margin: 0;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--ok) 8%, transparent);
+  font-size: 13px;
+}
+.acceptance strong {
+  margin-right: 6px;
+}
+.notice-line {
+  margin: 0;
+  color: var(--accent);
+  font-size: 13px;
+}
+.review-box {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--warn) 45%, var(--border));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--warn) 6%, transparent);
+}
+.review-history {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.review-history li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  background: var(--surface-2);
+  border-radius: 8px;
+}
+.review-history p {
+  margin: 0;
+  flex-basis: 100%;
+  font-size: 13px;
+}
+.outcome-draft {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.outcome-draft h4 {
+  margin: 0;
+}
+.draft-items {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.draft-item {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.draft-item.off {
+  opacity: 0.55;
+}
+.draft-item .grow {
+  flex: 1;
+  min-width: 140px;
+}
+.draft-item select {
+  width: auto;
+}
+.draft-item .check {
+  width: auto;
+}
+.draft-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-left: 24px;
+}
+.draft-detail p {
+  margin: 0;
+}
+.join-row {
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+.hud-chip.attention {
+  background: #fef3c7;
+  color: #92400e;
+  cursor: pointer;
+}
+.chat {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.chat-log {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 55vh;
+  min-height: 200px;
+  overflow-y: auto;
+  padding: 4px;
+}
+.chat-meta {
+  margin-top: 4px;
+}
+.bubble.failed {
+  border: 1px solid color-mix(in srgb, var(--danger) 40%, transparent);
 }

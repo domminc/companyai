@@ -1,10 +1,12 @@
 import { useState } from "react";
 import { api, type Agent, type CandidateProfile, type CompanyState, type ModelOption } from "../api";
+import { ChatDialog } from "./ChatDialog";
 import { Avatar, ErrorText, Modal, StatusBadge, useAction } from "./common";
 
 export function TeamView({ state, models }: { state: CompanyState; models: ModelOption[] }) {
   const [hiring, setHiring] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
+  const [chatWith, setChatWith] = useState<string | null>(null);
   const agent = state.agents.find((a) => a.id === selected);
 
   return (
@@ -67,7 +69,19 @@ export function TeamView({ state, models }: { state: CompanyState; models: Model
       )}
 
       {hiring && <HireDialog state={state} models={models} onClose={() => setHiring(false)} />}
-      {agent && <AgentDialog agent={agent} state={state} models={models} onClose={() => setSelected(null)} />}
+      {agent && (
+        <AgentDialog
+          agent={agent}
+          state={state}
+          models={models}
+          onClose={() => setSelected(null)}
+          onChat={() => {
+            setSelected(null);
+            setChatWith(agent.id);
+          }}
+        />
+      )}
+      {chatWith && <ChatDialog agentId={chatWith} state={state} onClose={() => setChatWith(null)} />}
     </section>
   );
 }
@@ -259,7 +273,19 @@ function HermesFields({
   );
 }
 
-function AgentDialog({ agent, state, models, onClose }: { agent: Agent; state: CompanyState; models: ModelOption[]; onClose: () => void }) {
+function AgentDialog({
+  agent,
+  state,
+  models,
+  onClose,
+  onChat,
+}: {
+  agent: Agent;
+  state: CompanyState;
+  models: ModelOption[];
+  onClose: () => void;
+  onChat: () => void;
+}) {
   const [draft, setDraft] = useState({
     ...agent,
     skillsText: agent.skills.join(", "),
@@ -295,6 +321,9 @@ function AgentDialog({ agent, state, models, onClose }: { agent: Agent; state: C
           <Avatar agent={agent} size={48} />
           <StatusBadge status={agent.status} />
           <span className="muted">입사 {new Date(agent.hiredAt).toLocaleDateString("ko-KR")}</span>
+          <button type="button" className="btn small" onClick={onChat}>
+            💬 대화하기
+          </button>
         </div>
         <div className="grid-2">
           <label>
