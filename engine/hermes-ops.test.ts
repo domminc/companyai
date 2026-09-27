@@ -86,6 +86,14 @@ test("a kanban card for a Hermes employee shows them at work, and finishing it i
   const board = await company.kanbanBoard(gateway.id, "default");
   assert.deepEqual(board.columns.find((c) => c.name === "done")!.tasks.map((c) => c.id), [card.id]);
   await company.kanbanComment(gateway.id, "default", card.id, "숫자 출처도 붙여 주세요");
+  // Like real Hermes: request-changes only applies to a card in review.
+  await assert.rejects(company.kanbanAction(gateway.id, "default", card.id, "request-changes", { comment: "다시" }), (e: EngineError) => e.status === 409);
+
+  // Closing a card by hand sends a summary, since Hermes refuses to close one without evidence.
+  const manual = await company.kanbanCreateCard(gateway.id, "default", { title: "손으로 닫을 카드" });
+  await company.kanbanAction(gateway.id, "default", manual.id, "unblock");
+  await company.kanbanAction(gateway.id, "default", manual.id, "approve");
+  assert.equal((await company.kanbanCard(gateway.id, "default", manual.id)).task.latest_summary, "대표님이 완료 처리했습니다");
   const detail = await company.kanbanCard(gateway.id, "default", card.id);
   assert.match(detail.task.result ?? "", /researcher/);
   assert.equal(detail.comments[0].author, "대표");

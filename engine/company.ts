@@ -493,6 +493,10 @@ export class Company {
       if (agent.runtime.kind !== "hermes" || agent.runtime.gatewayId !== gatewayId) throw new EngineError(`${agent.name}님은 이 게이트웨이의 Hermes 직원이 아닙니다.`);
       body = { profile: agent.runtime.profile, reclaim_first: body.reclaim_first === true };
     }
+    if (action === "approve" && !body.summary && !body.result) {
+      // Hermes won't close a card without evidence of the outcome; say who closed it.
+      body = { ...body, summary: `${actorContext.getStore()?.name ?? USER_DISPLAY_NAME}님이 완료 처리했습니다` };
+    }
     const result = await this.viaHermes("카드 동작", () => this.kanbanFor(gatewayId).act(slug, cardId, action, body));
     void this.syncHermesWork();
     return result;

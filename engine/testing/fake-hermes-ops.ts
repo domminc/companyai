@@ -318,16 +318,24 @@ export function createFakeOps(opts: FakeOpsOptions = {}): FakeOps {
       case "comments":
         card.comments.push({ id: ++seq, author: String(body.author ?? "deskrpg"), body: String(body.body), created_at: secs() });
         return json(res, 201, { comment: card.comments.at(-1) });
-      case "approve":
+      case "approve": {
         if (!["running", "ready", "blocked", "review"].includes(card.status)) return json(res, 409, { error: "invalid_transition", detail: "not in a completable status" });
+        // Like Hermes: a card is only closed with evidence of what came of it.
+        const summary = typeof body.summary === "string" && body.summary ? body.summary : null;
+        const result = typeof body.result === "string" && body.result ? body.result : null;
+        if (!summary && !result && !card.result && !card.latest_summary) {
+          return json(res, 409, { error: "invalid_transition", detail: `completion blocked: ${card.id} has no result or summary evidence` });
+        }
         card.status = "done";
-        card.result = typeof body.result === "string" && body.result ? body.result : card.result;
+        card.result = result ?? card.result;
+        card.latest_summary = summary ?? card.latest_summary;
         event(card, "completed");
         return json(res, 200, {});
+      }
       case "request-changes":
         if (!body.comment) return json(res, 400, { error: "invalid_field", detail: "comment" });
         card.comments.push({ id: ++seq, author: "deskrpg", body: String(body.comment), created_at: secs() });
-        if (card.status !== "review" && card.status !== "done") return json(res, 409, { error: "invalid_transition", detail: "not in review" });
+        if (card.status !== "review") return json(res, 409, { error: "invalid_transition", detail: `the card is not in review (status=${card.status}) and has no active run` });
         card.status = "ready";
         work(card);
         return json(res, 200, { outcome: "reopened" });

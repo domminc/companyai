@@ -496,7 +496,7 @@ function CardDialog({
               >
                 댓글 달기
               </button>
-              {(status === "review" || status === "done") && (
+              {status === "review" && (
                 <button
                   className="btn small"
                   disabled={!comment.trim() || act.busy}
