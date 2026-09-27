@@ -2,7 +2,8 @@ import { createReadStream, existsSync, statSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { dirname, extname, join, normalize, resolve } from "node:path";
 import { type Actor, Company, EngineError } from "../engine/company";
-import { AnthropicLLM, AVAILABLE_MODELS, type LLM, MockLLM } from "../engine/llm";
+import Anthropic from "@anthropic-ai/sdk";
+import { AnthropicLLM, AVAILABLE_MODELS, DEFAULT_MODEL, describeError, type LLM, MockLLM } from "../engine/llm";
 import { JsonFileStore } from "../engine/store";
 import {
   atLeast,
@@ -16,6 +17,7 @@ import {
   sessionCookie,
   type User,
 } from "./auth";
+import { keyHint, SettingsStore } from "./settings";
 
 try {
   process.loadEnvFile();
@@ -27,13 +29,22 @@ const PORT = Number(process.env.PORT ?? 8787);
 const DATA_FILE = resolve(process.env.COMPANYAI_DATA ?? "data/company.json");
 const STATIC_DIR = resolve("dist");
 
+const settings = await SettingsStore.open(join(dirname(DATA_FILE), "settings.json"));
+const mockDelay = Number(process.env.COMPANYAI_MOCK_DELAY_MS ?? 25);
+const envHasKey = !!(process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN);
+
+/** Where Claude's key comes from: .env (wins), the key entered in the app, or none (demo mode). */
+function claudeSource(): "env" | "app" | "none" {
+  if (process.env.COMPANYAI_PROVIDER === "mock") return "none";
+  if (envHasKey || process.env.COMPANYAI_PROVIDER === "anthropic") return "env";
+  return settings.anthropicApiKey ? "app" : "none";
+}
+
 function chooseLLM(): LLM {
-  const choice = process.env.COMPANYAI_PROVIDER;
-  const mockDelay = Number(process.env.COMPANYAI_MOCK_DELAY_MS ?? 25);
-  if (choice === "mock") return new MockLLM(mockDelay);
-  if (choice === "anthropic") return new AnthropicLLM();
-  const hasCredentials = !!(process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN);
-  return hasCredentials ? new AnthropicLLM() : new MockLLM(mockDelay);
+  const source = claudeSource();
+  if (source === "env") return new AnthropicLLM();
+  if (source === "app") return new AnthropicLLM(new Anthropic({ apiKey: settings.anthropicApiKey }));
+  return new MockLLM(mockDelay);
 }
 
 const company = await Company.open({ llm: chooseLLM(), store: new JsonFileStore(DATA_FILE) });
@@ -143,6 +154,42 @@ route("PATCH", "/api/auth/me", async ({ user, body }) => {
 function requireLogin() {
   if (!auth.enabled) throw new AuthError("먼저 🔐 로그인 설정에서 소유자 계정을 만드세요.", 409);
 }
+
+// ------------------------------------------------------------------ Claude key
+
+function claudeStatus() {
+  const source = claudeSource();
+  return { provider: company.provider, source, ...(source === "app" ? { keyHint: keyHint(settings.anthropicApiKey!) } : {}) };
+}
+
+route("GET", "/api/settings/claude", () => claudeStatus());
+route("PUT", "/api/settings/claude", async ({ body }) => {
+  if (claudeSource() === "env") throw new EngineError("서버의 .env에 있는 키를 쓰고 있습니다. 바꾸려면 .env를 고치세요.", 409);
+  const apiKey = typeof body.apiKey === "string" ? body.apiKey.trim() : "";
+  if (!apiKey) throw new EngineError("API 키를 입력하세요.");
+  const client = new Anthropic({ apiKey });
+  try {
+    await client.models.retrieve(DEFAULT_MODEL); // cheap check that the key works
+  } catch (err) {
+    if (err instanceof Anthropic.AuthenticationError || err instanceof Anthropic.PermissionDeniedError) {
+      throw new EngineError("이 API 키로 Claude에 연결할 수 없습니다. 키를 다시 확인하세요.", 400);
+    }
+    throw new EngineError(`키를 확인하지 못했습니다: ${describeError(err)}`, 502);
+  }
+  await settings.setAnthropicApiKey(apiKey);
+  company.setLLM(new AnthropicLLM(client));
+  company.note("Claude API 키를 등록했습니다. 이제 Claude 직원들이 실제로 일합니다.");
+  streams.announce({ type: "provider", provider: company.provider });
+  return claudeStatus();
+}, "owner");
+route("DELETE", "/api/settings/claude", async () => {
+  if (claudeSource() === "env") throw new EngineError("서버의 .env에 있는 키는 앱에서 지울 수 없습니다.", 409);
+  await settings.setAnthropicApiKey(undefined);
+  company.setLLM(new MockLLM(mockDelay));
+  company.note("Claude API 키를 지웠습니다. 데모 모드로 돌아갑니다.");
+  streams.announce({ type: "provider", provider: company.provider });
+  return claudeStatus();
+}, "owner");
 
 route("GET", "/api/users", () => (requireLogin(), auth.users()), "owner");
 route("POST", "/api/users", async ({ body }) => {
@@ -290,8 +337,14 @@ const presence = (() => {
     closeAll() {
       for (const conn of [...conns.values()]) conn.close();
     },
+    /** Something every open app should hear about that isn't company state. */
+    announce(data: unknown) {
+      const frame = `data: ${JSON.stringify(data)}\n\n`;
+      for (const res of conns.keys()) res.write(frame);
+    },
   };
 })();
+const streams = presence;
 
 function handleEvents(req: IncomingMessage, res: ServerResponse, user?: User) {
   res.writeHead(200, {

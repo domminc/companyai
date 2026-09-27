@@ -17,7 +17,19 @@ AI 에이전트를 **직원으로 고용**하고, **업무를 지시**하고, **
           ↘  회의 소집  →  진행자 개회 → 손들기(SPEAK/PASS) → 발언 … → 회의록 · 액션 아이템  →  자동 업무 배정
 ```
 
-## 빠른 시작
+## 가장 쉬운 시작 (더블클릭)
+
+1. [Node.js](https://nodejs.org/ko/download) **LTS**를 설치합니다 (22 이상, 한 번만).
+2. [이 코드를 ZIP으로 받아](https://github.com/domminc/companyai/archive/refs/heads/claude/agent-hiring-meeting-engine-dd62tj.zip) 압축을 풉니다.
+3. 폴더 안의 파일을 더블클릭합니다.
+   - Windows: **`start-windows.bat`** (경고 창이 뜨면 "추가 정보" → "실행")
+   - Mac: **`start-mac.command`** (처음 한 번은 우클릭 → "열기")
+4. 잠시 후 브라우저에 **http://localhost:8787** 오피스가 열립니다. 처음 실행은 설치 때문에 몇 분 걸립니다.
+5. 오른쪽 위 **"Claude: 데모 모드 · 키 넣기"**를 눌러 [Anthropic API 키](https://console.anthropic.com/settings/keys)를 붙여 넣으면 실제 Claude가 일합니다. 파일을 고치거나 다시 켤 필요가 없습니다.
+
+끝낼 때는 검은 창을 닫으면 됩니다. 회사 데이터는 폴더 안 `data/`에 남아서 다음에 그대로 이어집니다.
+
+## 빠른 시작 (개발자용)
 
 ```bash
 npm install
@@ -27,6 +39,7 @@ npm run dev               # 엔진 :8787 + UI :5173
 
 브라우저에서 http://localhost:5173 을 엽니다.
 
+API 키는 `.env` 대신 앱 오른쪽 위 배지를 눌러 넣어도 됩니다 (`data/settings.json`에 저장, `.env`의 키가 있으면 그쪽이 우선).
 API 키가 없으면 **mock 모드**로 켜져서 가짜 응답으로 전체 흐름(채용 → 업무 → 회의 → 자동 배정)을 체험할 수 있습니다. 화면 오른쪽 위 배지로 현재 모드를 확인할 수 있습니다.
 
 Hermes 직원을 써 보려면 상단 **Hermes 연결**에서 게이트웨이(예: `http://localhost:8642`, `API_SERVER_KEY`)를 등록한 뒤, 채용할 때 두뇌를 **Hermes 프로필**로 고르고 프로필 이름을 입력합니다.
@@ -116,6 +129,8 @@ npm run build && npm start   # http://localhost:8787 에서 UI와 API를 함께 
 | 칸반·크론 | — | Hermes 칸반 카드 배정, 프로필 크론 자동화 (DeskRPG 플러그인 API) |
 | 호출 | Messages API 스트리밍 | `POST /p/<프로필>/v1/runs` + `GET /v1/runs/<id>/events` (SSE) |
 - 회의에서 나온 업무는 회의 요약·결정사항을 컨텍스트로 받아 진행합니다.
+- 실제 Hermes Agent + DeskRPG 플러그인 0.22.0 게이트웨이에 연결해 칸반(보드·카드 만들기, 댓글, 다시 배정, 완료 처리, 보관, 삭제)과 크론(만들기, 수정, 일시정지, 재개, 지금 실행, 삭제)을 모두 확인했습니다. Hermes는 결과가 없는 카드를 그냥 닫지 않으므로 앱이 "○○님이 완료 처리했습니다" 요약을 붙여 닫고, 수정 요청은 검토 단계 카드에만 됩니다.
+- 크론 자동화가 실제로 돌려면 Hermes에 기본 모델이 설정되어 있어야 합니다 (`hermes model <이름>`). 없으면 자동화 카드에 그 오류가 그대로 표시됩니다.
 - 서버는 15초마다(`COMPANYAI_HERMES_SYNC_MS`) 게이트웨이를 살펴 Hermes 직원이 칸반 카드나 크론 작업을 하고 있으면 3D 오피스 자리에서 일하는 모습(📋/⏰ 말풍선)으로 보여 주고, 카드가 끝나면 활동 로그에 남깁니다.
 - 상태는 `data/company.json`에 저장됩니다. 서버가 도중에 꺼지면 진행 중이던 업무는 `할 일`로 되돌아가 다시 실행되고, 진행 중이던 회의는 `실패`로 표시됩니다.
 
@@ -136,6 +151,8 @@ engine/            # UI와 무관한 순수 엔진 (다른 앱에서도 import �
   testing/         # 가짜 Hermes 게이트웨이, 스크립트 LLM
 server/index.ts    # REST API + SSE(/api/events) + 빌드된 UI 서빙 + 권한 검사 + 접속자
 server/auth.ts     # 선택적 로그인: 계정·역할·서명 쿠키
+server/settings.ts # 앱에서 넣은 Anthropic API 키 (data/settings.json)
+start-windows.bat · start-mac.command · start.sh  # 더블클릭 실행 (설치 → 빌드 → 시작 → 브라우저)
 web/public/models/kenney/  # Kenney Mini Characters (CC0) — License.txt 포함
 web/               # React + Vite UI
   src/office/      # 3D 오피스 (three.js)
@@ -203,6 +220,7 @@ await company.settle(); // 모든 업무와 회의가 끝날 때까지 대기
 | GET / DELETE | `/api/gateways/:id/kanban/boards/:board/cards/:card` | 카드 상세(결과·댓글·실행) / 삭제 |
 | POST | `/api/gateways/:id/kanban/boards/:board/cards/:card/comments` | `{ body }` 댓글 |
 | POST | `/api/gateways/:id/kanban/boards/:board/cards/:card/actions/:action` | `approve`, `request-changes {comment}`, `reassign {agentId}`, `unblock`, `terminate`, `archive` 등 |
+| GET / PUT / DELETE | `/api/settings/claude` | Claude 연결 상태 / `{ apiKey }` 확인 후 저장하고 바로 전환 (소유자) / 지우고 데모 모드로 |
 | GET | `/api/auth/me` | `{ enabled, user }` |
 | POST | `/api/auth/setup` · `/login` · `/logout` | 소유자 계정 만들기(로그인 켜기) · 로그인 · 로그아웃 |
 | PATCH | `/api/auth/me` | 내 표시 이름·비밀번호 |

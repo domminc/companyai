@@ -35,6 +35,13 @@ export interface OnlineUser {
   role: Role;
 }
 
+export interface ClaudeStatus {
+  provider: string;
+  /** .env, entered in the app, or none (demo mode). */
+  source: "env" | "app" | "none";
+  keyHint?: string;
+}
+
 export interface AuthInfo {
   enabled: boolean;
   user: User | null;
@@ -82,6 +89,10 @@ export const api = {
   createUser: (input: { username: string; password: string; displayName: string; role: Role }) => request<User>("POST", "/users", input),
   updateUser: (id: string, patch: { displayName?: string; password?: string; role?: Role }) => request<User>("PATCH", `/users/${id}`, patch),
   deleteUser: (id: string) => request<{ ok: true }>("DELETE", `/users/${id}`),
+
+  claudeStatus: () => request<ClaudeStatus>("GET", "/settings/claude"),
+  setClaudeKey: (apiKey: string) => request<ClaudeStatus>("PUT", "/settings/claude", { apiKey }),
+  removeClaudeKey: () => request<ClaudeStatus>("DELETE", "/settings/claude"),
 
   bootstrap: () => request<Bootstrap>("GET", "/state"),
   updateCompany: (patch: { name?: string; mission?: string; defaultModel?: string }) =>

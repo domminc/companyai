@@ -1,6 +1,7 @@
 import { lazy, type ReactNode, Suspense, useEffect, useState } from "react";
 import { type AuthInfo, api, type CompanyState, type ModelOption, type OnlineUser } from "./api";
 import { AccountArea, LoginScreen, useAuth } from "./components/Accounts";
+import { ClaudeKeyDialog } from "./components/ClaudeKeyDialog";
 import { timeAgo } from "./components/common";
 import { GatewaysDialog } from "./components/GatewaysDialog";
 import { HermesKanbanView } from "./components/HermesKanbanView";
@@ -124,6 +125,7 @@ function CompanyHeader({
 }) {
   const [editing, setEditing] = useState(false);
   const [gateways, setGateways] = useState(false);
+  const [claudeKey, setClaudeKey] = useState(false);
   const [name, setName] = useState(state.name);
   const [mission, setMission] = useState(state.mission);
 
@@ -181,13 +183,18 @@ function CompanyHeader({
             ))}
           </select>
         </label>
-        <span className={`provider ${provider}`} title={provider === "mock" ? "ANTHROPIC_API_KEY를 설정하고 서버를 재시작하면 실제 Claude가 일합니다." : undefined}>
-          {provider === "mock" ? "Claude: 데모 모드" : "Claude 연결됨"}
-        </span>
+        <button
+          className={`provider ${provider}`}
+          onClick={() => setClaudeKey(true)}
+          title={provider === "mock" ? "Anthropic API 키를 넣으면 실제 Claude가 일합니다" : "Claude 연결 정보"}
+        >
+          {provider === "mock" ? "Claude: 데모 모드 · 키 넣기" : "Claude 연결됨"}
+        </button>
         <span className={`dot ${connected ? "on" : "off"}`} title={connected ? "실시간 연결됨" : "연결 끊김"} />
         {children}
       </div>
       {gateways && <GatewaysDialog state={state} onClose={() => setGateways(false)} />}
+      {claudeKey && <ClaudeKeyDialog canEdit={canAdmin} onClose={() => setClaudeKey(false)} />}
     </header>
   );
 }

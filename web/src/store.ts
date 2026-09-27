@@ -97,8 +97,9 @@ export function useCompany(): CompanyStore {
       );
     };
     source.onmessage = (msg) => {
-      const event = JSON.parse(msg.data) as CompanyEvent | { type: "presence"; online: OnlineUser[] };
+      const event = JSON.parse(msg.data) as CompanyEvent | { type: "presence"; online: OnlineUser[] } | { type: "provider"; provider: string };
       if (event.type === "presence") setOnline(event.online);
+      else if (event.type === "provider") setMeta((m) => ({ ...m, provider: event.provider }));
       else dispatch(event);
     };
     return () => source.close();

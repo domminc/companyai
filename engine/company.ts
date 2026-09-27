@@ -236,6 +236,11 @@ export class Company {
     return this.llm.name;
   }
 
+  /** Switches the brain of every Claude employee, e.g. once an API key is entered. Running work finishes on the old one. */
+  setLLM(llm: LLM) {
+    this.llm = llm;
+  }
+
   /** Runs a request on behalf of a signed-in person, so what it logs and says carries their name. */
   as<T>(actor: Actor | undefined, fn: () => T): T {
     return actor ? actorContext.run(actor, fn) : fn();
