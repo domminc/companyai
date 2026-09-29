@@ -17,7 +17,19 @@ AI 에이전트를 **직원으로 고용**하고, **업무를 지시**하고, **
           ↘  회의 소집  →  진행자 개회 → 손들기(SPEAK/PASS) → 발언 … → 회의록 · 액션 아이템  →  자동 업무 배정
 ```
 
-## 가장 쉬운 시작 (더블클릭)
+## 가장 쉬운 시작 — Mac (터미널에 한 줄)
+
+1. **터미널**을 엽니다 (⌘+Space → "터미널" 입력 → Enter).
+2. 아래 한 줄을 붙여 넣고 Enter:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/domminc/companyai/claude/agent-hiring-meeting-engine-dd62tj/install-mac.sh | bash
+```
+
+Node.js가 없어도 알아서 준비하고(관리자 암호 불필요, `~/CompanyAI` 안에만 설치), 앱을 설치한 뒤 브라우저를 엽니다. 다음부터는 **바탕화면의 `CompanyAI.command`**를 더블클릭하면 됩니다. 업데이트는 같은 한 줄을 다시 붙여 넣으면 되고, 회사 데이터(`~/CompanyAI/data`)는 그대로 남습니다.
+ZIP으로 받은 `start-mac.command`는 Mac이 "악성 코드인지 확인할 수 없다"며 막을 수 있어서, Mac에서는 이 방법을 권합니다.
+
+## 가장 쉬운 시작 — Windows (더블클릭)
 
 1. [Node.js](https://nodejs.org/ko/download) **LTS**를 설치합니다 (22 이상, 한 번만).
 2. [이 코드를 ZIP으로 받아](https://github.com/domminc/companyai/archive/refs/heads/claude/agent-hiring-meeting-engine-dd62tj.zip) 압축을 풉니다.

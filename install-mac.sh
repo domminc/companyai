@@ -76,8 +76,11 @@ rm -rf "$tmp"
 # 3. Packages and the screens.
 say "[3/4] 필요한 파일을 설치하고 화면을 만듭니다 (처음에는 몇 분 걸립니다)..."
 cd "$APP"
-npm install --no-audit --no-fund --loglevel=error || die "npm install 실패"
-npm run build --silent >/dev/null || die "화면 만들기 실패"
+npm install --no-audit --no-fund --loglevel=error --update-notifier=false || die "npm install 실패"
+if ! npm run build >"$HOME_DIR/build.log" 2>&1; then
+  tail -30 "$HOME_DIR/build.log"
+  die "화면 만들기 실패"
+fi
 
 # 4. A launcher made here rather than downloaded, so Gatekeeper lets it open with a double-click.
 launcher_body() {
