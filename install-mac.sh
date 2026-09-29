@@ -84,23 +84,43 @@ fi
 
 # 4. A launcher made here rather than downloaded, so Gatekeeper lets it open with a double-click.
 launcher_body() {
+  # Paths are fixed at install time; the rest is written literally.
   cat <<EOF
 #!/usr/bin/env bash
 # CompanyAI 시작 (설치 프로그램이 만든 파일)
 export PATH="$NODE_DIR/bin:\$PATH"
 export COMPANYAI_DATA="$HOME_DIR/data/company.json"
+PORT_FILE="$HOME_DIR/port"
 cd "$APP" || exit 1
-if lsof -ti tcp:8787 -sTCP:LISTEN >/dev/null 2>&1; then
-  echo " 이미 켜져 있습니다. 브라우저를 엽니다."
-  open http://localhost:8787 2>/dev/null || xdg-open http://localhost:8787
-  exit 0
-fi
-echo
-echo " CompanyAI 를 켭니다. 잠시 후 브라우저가 열립니다: http://localhost:8787"
-echo " 끝내려면 이 창을 닫으세요."
-(sleep 4 && (open http://localhost:8787 2>/dev/null || xdg-open http://localhost:8787 >/dev/null 2>&1)) &
-exec npm start
 EOF
+  cat <<'LAUNCHER'
+
+open_url() { open "$1" 2>/dev/null || xdg-open "$1" >/dev/null 2>&1; }
+in_use() { lsof -ti "tcp:$1" -sTCP:LISTEN >/dev/null 2>&1; }
+# Another program (another AI server, say) may already sit on the port; only ours answers this.
+is_ours() { curl -fs --max-time 2 "http://localhost:$1/api/health" 2>/dev/null | grep -q '"companyai"'; }
+
+port=$(cat "$PORT_FILE" 2>/dev/null || echo 8787)
+if in_use "$port"; then
+  if is_ours "$port"; then
+    echo " 이미 켜져 있습니다. 브라우저를 엽니다: http://localhost:$port"
+    open_url "http://localhost:$port"
+    exit 0
+  fi
+  echo " ${port}번은 다른 프로그램이 쓰고 있어서 빈 번호를 찾습니다..."
+  for p in $(seq 8788 8899); do
+    if ! in_use "$p"; then port=$p; break; fi
+  done
+fi
+echo "$port" >"$PORT_FILE"
+export PORT="$port"
+
+echo
+echo " CompanyAI 를 켭니다. 잠시 후 브라우저가 열립니다: http://localhost:$port"
+echo " 끝내려면 이 창을 닫으세요."
+(for _ in $(seq 1 60); do sleep 1; is_ours "$port" && break; done; open_url "http://localhost:$port") &
+exec npm start
+LAUNCHER
 }
 launcher="$HOME_DIR/CompanyAI.command"
 launcher_body >"$launcher"

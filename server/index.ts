@@ -89,6 +89,8 @@ function signIn(ctx: Ctx, user: User) {
   ctx.res.setHeader("set-cookie", sessionCookie(token, maxAge, isSecure(ctx.req)));
 }
 
+/** Lets the launcher tell this app apart from whatever else might be on the port. */
+route("GET", "/api/health", () => ({ app: "companyai" }), "public");
 route("GET", "/api/auth/me", ({ user }) => ({ enabled: auth.enabled, user: user ?? null }), "public");
 route(
   "POST",
@@ -446,6 +448,14 @@ const server = createServer(async (req, res) => {
 });
 
 const stopHermesSync = company.startHermesSync(Number(process.env.COMPANYAI_HERMES_SYNC_MS ?? 15_000));
+
+server.on("error", (err: NodeJS.ErrnoException) => {
+  if (err.code === "EADDRINUSE") {
+    console.error(`\n  ${PORT}번 포트를 다른 프로그램이 쓰고 있습니다. 다른 번호로 켜 주세요 (예: PORT=8788 npm start).\n`);
+    process.exit(1);
+  }
+  throw err;
+});
 
 server.listen(PORT, () => {
   console.log(`CompanyAI engine listening on http://localhost:${PORT}`);
