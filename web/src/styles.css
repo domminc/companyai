@@ -2032,3 +2032,22 @@ table.people select {
   flex-direction: column;
   gap: 6px;
 }
+
+.local-hermes {
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: var(--accent-soft);
+  border-color: transparent;
+}
+.local-hermes > div:first-child {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.local-hermes pre.code {
+  margin: 4px 0 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+}

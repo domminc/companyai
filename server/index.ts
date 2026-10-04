@@ -19,6 +19,7 @@ import {
   type User,
 } from "./auth";
 import { AutostartError, disable as disableAutostart, enable as enableAutostart, run as runCommand, status as autostartStatus } from "./autostart";
+import { discoverLocalHermes, sameGateway } from "./hermes-local";
 import { keyHint, SettingsStore } from "./settings";
 
 try {
@@ -194,6 +195,33 @@ route("DELETE", "/api/settings/claude", async () => {
   streams.announce({ type: "provider", provider: company.provider });
   return claudeStatus();
 }, "owner");
+
+// ------------------------------------------------------------ Hermes on this computer
+
+route(
+  "GET",
+  "/api/hermes/local",
+  async () => {
+    const { key: _key, ...local } = await discoverLocalHermes({ home: homedir() });
+    const connected = !!local.url && company.snapshot().gateways.some((g) => sameGateway(g.url, local.url!));
+    return { ...local, connected };
+  },
+  "owner",
+);
+route(
+  "POST",
+  "/api/hermes/local/connect",
+  async () => {
+    const local = await discoverLocalHermes({ home: homedir() });
+    if (!local.found || !local.url || !local.key) {
+      throw new EngineError("이 컴퓨터에서 설정된 Hermes를 찾지 못했습니다. 설치 명령을 먼저 실행해 주세요.", 404);
+    }
+    const existing = company.snapshot().gateways.find((g) => sameGateway(g.url, local.url!));
+    if (existing) return existing;
+    return company.addGateway({ name: "이 컴퓨터의 Hermes", url: local.url, apiKey: local.key });
+  },
+  "owner",
+);
 
 // ------------------------------------------------------------------ auto-start
 

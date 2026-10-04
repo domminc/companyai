@@ -45,6 +45,15 @@ export interface ClaudeStatus {
 
 export type { AutostartStatus };
 
+export interface LocalHermes {
+  found: boolean;
+  url?: string;
+  reachable: boolean;
+  plugin: boolean;
+  /** Already registered as a gateway. */
+  connected: boolean;
+}
+
 export interface AuthInfo {
   enabled: boolean;
   user: User | null;
@@ -96,6 +105,9 @@ export const api = {
   claudeStatus: () => request<ClaudeStatus>("GET", "/settings/claude"),
   setClaudeKey: (apiKey: string) => request<ClaudeStatus>("PUT", "/settings/claude", { apiKey }),
   removeClaudeKey: () => request<ClaudeStatus>("DELETE", "/settings/claude"),
+
+  localHermes: () => request<LocalHermes>("GET", "/hermes/local"),
+  connectLocalHermes: () => request<HermesGateway>("POST", "/hermes/local/connect"),
 
   autostart: () => request<AutostartStatus>("GET", "/settings/autostart"),
   setAutostart: (enabled: boolean) => request<AutostartStatus>("PUT", "/settings/autostart", { enabled }),

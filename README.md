@@ -29,6 +29,16 @@ curl -fsSL https://raw.githubusercontent.com/domminc/companyai/claude/agent-hiri
 Node.js가 없어도 알아서 준비하고(관리자 암호 불필요, `~/CompanyAI` 안에만 설치), 앱을 설치한 뒤 브라우저를 엽니다. 다음부터는 **바탕화면의 `CompanyAI.command`**를 더블클릭하면 됩니다. 업데이트는 같은 한 줄을 다시 붙여 넣으면 되고, 회사 데이터(`~/CompanyAI/data`)는 그대로 남습니다.
 ZIP으로 받은 `start-mac.command`는 Mac이 "악성 코드인지 확인할 수 없다"며 막을 수 있어서, Mac에서는 이 방법을 권합니다.
 
+**Mac Mini에 계속 켜 두려면:** 앱 오른쪽 위 ⚙ 설정 → **컴퓨터 켜면 자동 시작**을 켜세요. 로그인하면 알아서 켜지고, 꺼지면 다시 켜지며, 켜져 있는 동안 Mac이 잠들지 않습니다 (`caffeinate`). 로그는 `~/CompanyAI/logs/server.log`에 쌓입니다. 정전 뒤에도 돌아오게 하려면 시스템 설정의 자동 로그인도 켜 두세요. (macOS의 launchd를 쓰는데, 이 기능은 테스트에서 가짜 launchctl로만 확인했고 실제 Mac에서는 아직 돌려 보지 못했습니다.)
+
+### Hermes도 이 Mac에 설치하기 (선택, 칸반·자동화를 쓰려면)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/domminc/companyai/claude/agent-hiring-meeting-engine-dd62tj/install-hermes-mac.sh | bash
+```
+
+공식 설치 프로그램으로 Hermes Agent를 깔고, 모델(Claude)을 정하고, API 서버와 DeskRPG 플러그인(검토된 v0.22.0 고정)을 켠 뒤 게이트웨이를 백그라운드 서비스로 띄웁니다. 모델 키는 CompanyAI에 넣어 둔 것을 쓸지 물어보고(엔터), 이미 설정한 모델이 있으면 건드리지 않습니다. 다시 실행해도 안전합니다. 끝나면 CompanyAI의 **⚙ 설정 → Hermes 연결 → "이 컴퓨터의 Hermes 연결하기"** 한 번이면 연결됩니다 (접속 키는 서버가 Hermes 설정 파일에서 읽고 브라우저로는 나가지 않습니다).
+
 ## 가장 쉬운 시작 — Windows (더블클릭)
 
 1. [Node.js](https://nodejs.org/ko/download) **LTS**를 설치합니다 (22 이상, 한 번만).
@@ -88,7 +98,7 @@ npm run build && npm start   # http://localhost:8787 에서 UI와 API를 함께 
 | **Claude 직원 도구** | 채용·수정할 때 🔎 **웹 검색·페이지 읽기**, 🧪 **코드 실행**(Python 샌드박스)을 켤 수 있습니다. 업무·1:1 대화·검토에서만 쓰고 회의 발언에는 쓰지 않습니다. 쓰고 있는 도구(`web_search: 검색어`)가 업무 카드와 3D 말풍선에 보입니다 |
 | **Hermes 칸반** | 게이트웨이에 DeskRPG 플러그인이 있으면 나타나는 탭. 보드를 고르거나 만들고, 카드를 Hermes 직원(프로필)에게 배정하면 게이트웨이 워커가 알아서 처리합니다. 카드 결과·실행 기록 보기, 댓글, 완료 처리, 수정 요청, 다시 배정, 중단, 보관, 삭제 |
 | **자동화 (크론)** | Hermes 직원의 ⏰ **자동화**: "매일 오전 9시 업계 뉴스 요약"처럼 일정과 할 일을 정하면 게이트웨이의 크론이 앱이 꺼져 있어도 실행합니다. 지금 실행·일시정지·재개·삭제, 실행 기록과 결과 보기(플러그인 있을 때) |
-| **Hermes 연결** | Hermes API Server 등록·연결 확인·해제. 키는 서버의 `data/company.json`에만(평문) 저장되고 브라우저로는 나가지 않습니다 |
+| **Hermes 연결** | 이 컴퓨터의 Hermes를 자동으로 찾아 한 번에 연결하거나, 다른 컴퓨터의 Hermes API Server를 직접 등록·연결 확인·해제. 키는 서버의 `data/company.json`에만(평문) 저장되고 브라우저로는 나가지 않습니다 |
 | **로그인 (선택)** | 기본은 혼자 쓰는 모드라 로그인이 없습니다. 오른쪽 위 🔐 **로그인 설정**에서 소유자 계정을 만들면 로그인이 켜지고, **사람 관리**에서 멤버·보기 전용 계정을 추가할 수 있습니다. 접속 중인 사람은 머리글에 동그라미로, 3D 오피스에는 대표 책상 옆 **방문자**로 보입니다. 누가 한 일인지 활동 로그와 회의·대화에 이름이 남습니다 |
 | **활동** | 입사, 업무 시작/완료, 회의 시작/종료 등 회사의 모든 이벤트 로그 |
 
@@ -164,6 +174,9 @@ engine/            # UI와 무관한 순수 엔진 (다른 앱에서도 import �
 server/index.ts    # REST API + SSE(/api/events) + 빌드된 UI 서빙 + 권한 검사 + 접속자
 server/auth.ts     # 선택적 로그인: 계정·역할·서명 쿠키
 server/settings.ts # 앱에서 넣은 Anthropic API 키 (data/settings.json)
+server/autostart.ts # Mac 자동 시작 (launchd LaunchAgent 쓰기·지우기, caffeinate)
+server/hermes-local.ts # 이 컴퓨터의 Hermes 찾기 (~/.hermes/.env 읽기, 접속 확인)
+install-hermes-mac.sh # Hermes + 플러그인 설치·설정 (한 줄)
 start-windows.bat · start-mac.command · start.sh  # 더블클릭 실행 (설치 → 빌드 → 시작 → 브라우저)
 web/public/models/kenney/  # Kenney Mini Characters (CC0) — License.txt 포함
 web/               # React + Vite UI
@@ -232,6 +245,9 @@ await company.settle(); // 모든 업무와 회의가 끝날 때까지 대기
 | GET / DELETE | `/api/gateways/:id/kanban/boards/:board/cards/:card` | 카드 상세(결과·댓글·실행) / 삭제 |
 | POST | `/api/gateways/:id/kanban/boards/:board/cards/:card/comments` | `{ body }` 댓글 |
 | POST | `/api/gateways/:id/kanban/boards/:board/cards/:card/actions/:action` | `approve`, `request-changes {comment}`, `reassign {agentId}`, `unblock`, `terminate`, `archive` 등 |
+| GET / PUT | `/api/settings/autostart` | Mac 자동 시작 상태 / `{ enabled }` 켜고 끄기 (소유자) |
+| GET | `/api/hermes/local` | 이 컴퓨터의 Hermes: `{ found, url, reachable, plugin, connected }` (키는 안 나감) |
+| POST | `/api/hermes/local/connect` | 이 컴퓨터의 Hermes를 게이트웨이로 등록 (소유자) |
 | GET / PUT / DELETE | `/api/settings/claude` | Claude 연결 상태 / `{ apiKey }` 확인 후 저장하고 바로 전환 (소유자) / 지우고 데모 모드로 |
 | GET | `/api/auth/me` | `{ enabled, user }` |
 | POST | `/api/auth/setup` · `/login` · `/logout` | 소유자 계정 만들기(로그인 켜기) · 로그인 · 로그아웃 |

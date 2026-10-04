@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { api, type CompanyState } from "../api";
+import { useEffect, useState } from "react";
+import { api, type CompanyState, type LocalHermes } from "../api";
 import { ErrorText, Modal, timeAgo, useAction } from "./common";
 
 /** Register Hermes Agent API Servers whose profiles can be hired as employees. */
@@ -8,6 +8,11 @@ export function GatewaysDialog({ state, onClose }: { state: CompanyState; onClos
   const add = useAction();
   const row = useAction();
   const [tested, setTested] = useState<Record<string, string>>({});
+  const [local, setLocal] = useState<LocalHermes | null>(null);
+  const connect = useAction();
+  useEffect(() => {
+    api.localHermes().then(setLocal, () => setLocal(null));
+  }, [state.gateways.length]);
 
   return (
     <Modal title="Hermes 게이트웨이" onClose={onClose} wide>
@@ -19,6 +24,41 @@ export function GatewaysDialog({ state, onClose }: { state: CompanyState; onClos
           게이트웨이를 연결하면 그 프로필을 직원으로 채용할 수 있습니다. Hermes 직원은 프로필의 SOUL.md·도구·스킬·메모리를 그대로 가지고 일합니다.
           게이트웨이에서 <code>API_SERVER_ENABLED=true</code>와 <code>API_SERVER_KEY</code>를 설정하고 <code>hermes gateway</code>로 실행하세요.
         </p>
+
+        {local && !local.connected && (
+          <div className="card local-hermes">
+            {local.found ? (
+              <>
+                <div>
+                  <strong>이 컴퓨터에서 Hermes를 찾았습니다</strong>
+                  <div className="muted small">
+                    {local.url} ·{" "}
+                    {local.reachable ? (local.plugin ? "켜져 있음 · 칸반·자동화 플러그인 있음" : "켜져 있음 · 플러그인 없음 (칸반을 쓰려면 설치 명령을 다시 실행)") : "아직 켜지지 않았습니다"}
+                  </div>
+                </div>
+                <button
+                  className="btn primary"
+                  disabled={connect.busy || !local.reachable}
+                  onClick={() =>
+                    connect.run(async () => {
+                      await api.connectLocalHermes();
+                      setLocal({ ...local, connected: true });
+                    })
+                  }
+                >
+                  이 컴퓨터의 Hermes 연결하기
+                </button>
+              </>
+            ) : (
+              <div>
+                <strong>이 컴퓨터에는 아직 Hermes가 없습니다.</strong>
+                <div className="muted small">터미널에 아래 한 줄을 붙여 넣으면 설치하고 설정까지 끝냅니다. 끝나면 이 창을 다시 열어 주세요.</div>
+                <pre className="code">curl -fsSL https://raw.githubusercontent.com/domminc/companyai/claude/agent-hiring-meeting-engine-dd62tj/install-hermes-mac.sh | bash</pre>
+              </div>
+            )}
+            <ErrorText error={connect.error} />
+          </div>
+        )}
 
         {state.gateways.length > 0 && (
           <ul className="gateway-list">
