@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, type AuthInfo, LOGGED_OUT_EVENT, type OnlineUser, type Role, type User } from "../api";
+import { CityHero } from "./CityHero";
 import { ErrorText, Modal, useAction } from "./common";
+import { BrandMark } from "./BrandMark";
 
 export const ROLE_LABEL: Record<Role, string> = {
   owner: "소유자",
@@ -45,33 +47,41 @@ export function LoginScreen({ onLogin }: { onLogin: (info: AuthInfo) => void }) 
   const login = useAction();
   return (
     <div className="login-screen">
-      <form
-        className="card login-card stack"
-        onSubmit={(e) => {
-          e.preventDefault();
-          login.run(async () => onLogin(await api.login(username, password)));
-        }}
-      >
-        <div className="row">
-          <span className="logo">🏢</span>
-          <div>
-            <h1>로그인</h1>
-            <p className="muted small">이 오피스는 로그인한 사람만 들어올 수 있습니다.</p>
-          </div>
+      <div className="login-main">
+        <div className="login-brand">
+          <BrandMark size={26} />
+          CompanyAI
         </div>
-        <label>
-          아이디
-          <input value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="username" autoFocus required />
-        </label>
-        <label>
-          비밀번호
-          <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" required />
-        </label>
-        <ErrorText error={login.error} />
-        <button className="btn primary" disabled={login.busy}>
-          들어가기
-        </button>
-      </form>
+        <p className="eyebrow">☀ 새로운 하루, 함께하는 출근길</p>
+        <h1>
+          CompanyAI
+          <span>AI Coworking Space</span>
+        </h1>
+        <p className="tagline">AI 동료와 함께 일하고 회의하는, 나만의 3D 오피스</p>
+        <form
+          className="card login-card stack"
+          onSubmit={(e) => {
+            e.preventDefault();
+            login.run(async () => onLogin(await api.login(username, password)));
+          }}
+        >
+          <label>
+            아이디
+            <input value={username} onChange={(e) => setUsername(e.target.value)} placeholder="로그인 ID를 입력하세요" autoComplete="username" autoFocus required />
+          </label>
+          <label>
+            비밀번호
+            <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="비밀번호를 입력하세요" autoComplete="current-password" required />
+          </label>
+          <ErrorText error={login.error} />
+          <button className="btn primary" disabled={login.busy}>
+            들어가기
+          </button>
+        </form>
+      </div>
+      <div className="hero">
+        <CityHero />
+      </div>
     </div>
   );
 }
@@ -92,13 +102,14 @@ export function AccountArea({ auth, online, onAuth }: { auth: AuthInfo; online: 
             ))}
             {online.length > 5 && <span className="muted small">+{online.length - 5}</span>}
           </div>
-          <button className="btn small" onClick={() => setDialog("account")}>
-            {me.displayName} · {ROLE_LABEL[me.role]}
+          <button className="btn small account-btn" onClick={() => setDialog("account")}>
+            {me.displayName}
+            <span className="hide-sm"> · {ROLE_LABEL[me.role]}</span>
           </button>
         </div>
       ) : (
-        <button className="btn small ghost" onClick={() => setDialog("setup")} title="다른 사람과 같이 쓰려면 로그인을 켜세요">
-          🔐 로그인 설정
+        <button className="btn small ghost account-btn" onClick={() => setDialog("setup")} title="다른 사람과 같이 쓰려면 로그인을 켜세요">
+          🔐<span className="hide-sm"> 로그인 설정</span>
         </button>
       )}
       {dialog === "setup" && (

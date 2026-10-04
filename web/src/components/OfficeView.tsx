@@ -8,6 +8,8 @@ import { RuntimeBadge } from "./TeamView";
 
 type Tab = "office" | "team" | "tasks" | "meetings" | "hermes";
 
+const TICKER_MS = 20_000;
+
 export function OfficeView({
   state,
   models,
@@ -73,6 +75,14 @@ export function OfficeView({
     setView(v);
     scene.current?.setView(v);
   };
+
+  // What just happened, floating over the office for a few seconds instead of a permanent column.
+  const [clock, setClock] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setClock(Date.now()), 3000);
+    return () => clearInterval(id);
+  }, []);
+  const ticker = state.activity.filter((e) => clock - Date.parse(e.at) < TICKER_MS).slice(-3);
 
   const meeting = state.meetings.find((m) => m.status === "running");
   const working = state.agents.filter((a) => a.status === "working" || (a.status === "idle" && a.external)).length;
@@ -143,6 +153,15 @@ export function OfficeView({
               첫 직원 채용하기
             </button>
           </div>
+        )}
+        {ticker.length > 0 && (
+          <ul className="ticker" aria-live="polite">
+            {ticker.map((e) => (
+              <li key={e.id} className={e.level === "error" ? "error" : ""}>
+                {e.message}
+              </li>
+            ))}
+          </ul>
         )}
         <p className="office-hint">드래그로 회전 · 우클릭 드래그로 이동 · 휠로 확대 · 직원을 클릭하면 상세</p>
         {agent && (

@@ -1,11 +1,9 @@
-import { lazy, type ReactNode, Suspense, useEffect, useState } from "react";
-import { type AuthInfo, api, type CompanyState, type ModelOption, type OnlineUser } from "./api";
-import { AccountArea, LoginScreen, useAuth } from "./components/Accounts";
-import { ClaudeKeyDialog } from "./components/ClaudeKeyDialog";
-import { timeAgo } from "./components/common";
-import { GatewaysDialog } from "./components/GatewaysDialog";
+import { lazy, Suspense, useEffect, useState } from "react";
+import { type AuthInfo, type OnlineUser } from "./api";
+import { LoginScreen, useAuth } from "./components/Accounts";
 import { HermesKanbanView } from "./components/HermesKanbanView";
 import { MeetingsView } from "./components/MeetingsView";
+import { ActivityDrawer, TopBar, useUnread } from "./components/Shell";
 import { TasksView } from "./components/TasksView";
 import { TeamView } from "./components/TeamView";
 import { useCompany } from "./store";
@@ -51,6 +49,8 @@ function Company({ auth, onAuth }: { auth: AuthInfo; onAuth: (info: AuthInfo) =>
   });
 
   const [officeOpened, setOfficeOpened] = useState(tab === "office");
+  const [drawer, setDrawer] = useState(false);
+  const unread = useUnread(state, drawer);
   useEffect(() => {
     history.replaceState(null, "", `#${tab}`);
     if (tab === "office") setOfficeOpened(true);
@@ -72,154 +72,47 @@ function Company({ auth, onAuth }: { auth: AuthInfo; onAuth: (info: AuthInfo) =>
     hermes: state.agents.filter((a) => a.external).length,
   };
 
+  const tabs = TABS.filter((t) => t.id !== "hermes" || state.gateways.length > 0).map((t) => ({ ...t, count: counts[t.id] }));
+
   return (
-    <div className={`app ${readOnly ? "readonly" : ""}`}>
-      <CompanyHeader state={state} provider={provider} models={models} connected={connected} canAdmin={canAdmin}>
-        <AccountArea auth={auth} online={online} onAuth={onAuth} />
-      </CompanyHeader>
+    <div className={`app tab-${tab} ${readOnly ? "readonly" : ""}`}>
+      <TopBar
+        state={state}
+        provider={provider}
+        models={models}
+        connected={connected}
+        canAdmin={canAdmin}
+        auth={auth}
+        online={online}
+        onAuth={onAuth}
+        tabs={tabs}
+        tab={tab}
+        onTab={setTab}
+        unread={unread}
+        onActivity={() => setDrawer(true)}
+      />
       {readOnly && <div className="readonly-banner">보기 전용 계정입니다. 오피스를 둘러볼 수 있지만 바꿀 수는 없습니다.</div>}
-      <nav className="tabs">
-        {TABS.filter((t) => t.id !== "hermes" || state.gateways.length > 0).map((t) => (
-          <button key={t.id} className={tab === t.id ? "active" : ""} onClick={() => setTab(t.id)}>
-            {t.label}
-            {counts[t.id] > 0 && <span className="count">{counts[t.id]}</span>}
-          </button>
-        ))}
-      </nav>
-      <div className="layout">
-        <main>
-          {/* Once opened, the office stays mounted so people keep their places across tabs. */}
-          {officeOpened && (
-            <div hidden={tab !== "office"}>
-              <Suspense fallback={<div className="office-stage loading">3D 오피스를 불러오는 중…</div>}>
-                <OfficeView state={state} models={models} onNavigate={setTab} active={tab === "office"} people={people} />
-              </Suspense>
+      <div className="content">
+        {/* Once opened, the office stays mounted so people keep their places across tabs. */}
+        {officeOpened && (
+          <div className="office-wrap" hidden={tab !== "office"}>
+            <Suspense fallback={<div className="office-stage loading">3D 오피스를 불러오는 중…</div>}>
+              <OfficeView state={state} models={models} onNavigate={setTab} active={tab === "office"} people={people} />
+            </Suspense>
+          </div>
+        )}
+        {tab !== "office" && (
+          <main className="page">
+            <div className="page-inner">
+              {tab === "team" && <TeamView state={state} models={models} />}
+              {tab === "tasks" && <TasksView state={state} />}
+              {tab === "meetings" && <MeetingsView state={state} />}
+              {tab === "hermes" && <HermesKanbanView state={state} />}
             </div>
-          )}
-          {tab === "team" && <TeamView state={state} models={models} />}
-          {tab === "tasks" && <TasksView state={state} />}
-          {tab === "meetings" && <MeetingsView state={state} />}
-          {tab === "hermes" && <HermesKanbanView state={state} />}
-        </main>
-        <ActivityFeed state={state} />
-      </div>
-    </div>
-  );
-}
-
-function CompanyHeader({
-  state,
-  provider,
-  models,
-  connected,
-  canAdmin,
-  children,
-}: {
-  state: CompanyState;
-  provider: string;
-  models: ModelOption[];
-  connected: boolean;
-  /** Company settings and Hermes connections belong to the owner once login is on. */
-  canAdmin: boolean;
-  children?: ReactNode;
-}) {
-  const [editing, setEditing] = useState(false);
-  const [gateways, setGateways] = useState(false);
-  const [claudeKey, setClaudeKey] = useState(false);
-  const [name, setName] = useState(state.name);
-  const [mission, setMission] = useState(state.mission);
-
-  const save = async () => {
-    await api.updateCompany({ name, mission });
-    setEditing(false);
-  };
-
-  return (
-    <header className="company-header">
-      <div className="company-id">
-        <span className="logo">🏢</span>
-        {editing ? (
-          <form
-            className="company-edit"
-            onSubmit={(e) => {
-              e.preventDefault();
-              save();
-            }}
-          >
-            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="회사 이름" autoFocus />
-            <input value={mission} onChange={(e) => setMission(e.target.value)} placeholder="미션 (직원들의 모든 판단 기준이 됩니다)" />
-            <button className="btn primary small">저장</button>
-            <button type="button" className="btn ghost small" onClick={() => setEditing(false)}>
-              취소
-            </button>
-          </form>
-        ) : (
-          <button
-            className="company-title"
-            disabled={!canAdmin}
-            onClick={() => {
-              setName(state.name);
-              setMission(state.mission);
-              setEditing(true);
-            }}
-            title="회사 정보 수정"
-          >
-            <h1>{state.name}</h1>
-            <p className="muted">{state.mission || (canAdmin ? "미션을 설정하세요 ✎" : "")}</p>
-          </button>
+          </main>
         )}
       </div>
-      <div className="header-meta">
-        <button className="btn small" onClick={() => setGateways(true)} disabled={!canAdmin}>
-          Hermes 연결{state.gateways.length > 0 && <span className="count">{state.gateways.length}</span>}
-        </button>
-        <label className="row tight small">
-          기본 모델
-          <select value={state.defaultModel} disabled={!canAdmin} onChange={(e) => api.updateCompany({ defaultModel: e.target.value })}>
-            {models.map((m) => (
-              <option key={m.id} value={m.id}>
-                {m.label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <button
-          className={`provider ${provider}`}
-          onClick={() => setClaudeKey(true)}
-          title={provider === "mock" ? "Anthropic API 키를 넣으면 실제 Claude가 일합니다" : "Claude 연결 정보"}
-        >
-          {provider === "mock" ? "Claude: 데모 모드 · 키 넣기" : "Claude 연결됨"}
-        </button>
-        <span className={`dot ${connected ? "on" : "off"}`} title={connected ? "실시간 연결됨" : "연결 끊김"} />
-        {children}
-      </div>
-      {gateways && <GatewaysDialog state={state} onClose={() => setGateways(false)} />}
-      {claudeKey && <ClaudeKeyDialog canEdit={canAdmin} onClose={() => setClaudeKey(false)} />}
-    </header>
-  );
-}
-
-function ActivityFeed({ state }: { state: CompanyState }) {
-  const [, tick] = useState(0);
-  useEffect(() => {
-    const id = setInterval(() => tick((n) => n + 1), 30_000);
-    return () => clearInterval(id);
-  }, []);
-  return (
-    <aside className="activity">
-      <h3>활동</h3>
-      {state.activity.length === 0 && <p className="muted small">아직 활동이 없습니다.</p>}
-      <ul>
-        {[...state.activity].reverse().slice(0, 60).map((e) => (
-          <li key={e.id} className={e.level === "error" ? "error-text" : ""}>
-            <span>
-              {e.message}
-              {e.by && <span className="muted"> · {e.by}</span>}
-            </span>
-            <time className="muted">{timeAgo(e.at)}</time>
-          </li>
-        ))}
-      </ul>
-    </aside>
+      <ActivityDrawer state={state} open={drawer} onClose={() => setDrawer(false)} />
+    </div>
   );
 }

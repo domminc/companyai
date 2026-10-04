@@ -120,7 +120,7 @@ export class OfficeScene {
     private container: HTMLElement,
     private callbacks: SceneCallbacks,
   ) {
-    this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+    this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
@@ -130,7 +130,7 @@ export class OfficeScene {
     this.labels.domElement.className = "office-labels";
     container.appendChild(this.labels.domElement);
 
-    this.scene.background = new THREE.Color("#e9eef2");
+    // No scene background: the stage's CSS sky shows through the transparent canvas.
     this.scene.add(new THREE.HemisphereLight("#ffffff", "#b9a891", 1.25));
     const sun = new THREE.DirectionalLight("#fff6e8", 1.9);
     sun.position.set(8, 16, 9);
@@ -337,9 +337,9 @@ export class OfficeScene {
     const vHalf = THREE.MathUtils.degToRad(this.camera.fov / 2);
     const hHalf = Math.atan(Math.tan(vHalf) * this.camera.aspect);
     // On a phone, frame the middle of the floor at a readable size; the rest is a pan away.
-    const widthShare = this.camera.aspect < 0.8 ? 0.33 : 0.54;
+    const widthShare = this.camera.aspect < 0.8 ? 0.33 : 0.66;
     const fitWidth = (this.layout.width * widthShare) / Math.tan(hHalf);
-    const fitDepth = (this.layout.depth * 0.62) / Math.tan(vHalf);
+    const fitDepth = (this.layout.depth * 0.78) / Math.tan(vHalf);
     return { target: new THREE.Vector3(0, 0, -0.4), distance: Math.max(fitWidth, fitDepth) };
   }
 
