@@ -2024,3 +2024,11 @@ table.people select {
     padding: 16px 12px 40px;
   }
 }
+
+.hint-list {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}

@@ -2,9 +2,12 @@ import { type ReactNode, useEffect, useRef, useState } from "react";
 import { type AuthInfo, api, type CompanyState, type ModelOption, type OnlineUser } from "../api";
 import { AccountArea } from "./Accounts";
 import { BrandMark } from "./BrandMark";
+import { AutostartDialog } from "./AutostartDialog";
 import { ClaudeKeyDialog } from "./ClaudeKeyDialog";
 import { ErrorText, Modal, timeAgo, useAction } from "./common";
 import { GatewaysDialog } from "./GatewaysDialog";
+
+type MenuDialog = "company" | "claude" | "gateways" | "autostart";
 
 export interface TabDef<T extends string> {
   id: T;
@@ -42,7 +45,7 @@ export function TopBar<T extends string>({
   unread: number;
   onActivity: () => void;
 }) {
-  const [dialog, setDialog] = useState<"company" | "claude" | "gateways" | null>(null);
+  const [dialog, setDialog] = useState<MenuDialog | null>(null);
   return (
     <header className="topbar">
       <button className="brand" onClick={() => canAdmin && setDialog("company")} disabled={!canAdmin} title={canAdmin ? "회사 정보 수정" : undefined}>
@@ -87,6 +90,7 @@ export function TopBar<T extends string>({
       {dialog === "company" && <CompanyDialog state={state} onClose={() => setDialog(null)} />}
       {dialog === "gateways" && <GatewaysDialog state={state} onClose={() => setDialog(null)} />}
       {dialog === "claude" && <ClaudeKeyDialog canEdit={canAdmin} onClose={() => setDialog(null)} />}
+      {dialog === "autostart" && <AutostartDialog onClose={() => setDialog(null)} />}
     </header>
   );
 }
@@ -102,7 +106,7 @@ function SettingsMenu({
   provider: string;
   models: ModelOption[];
   canAdmin: boolean;
-  onOpen: (dialog: "company" | "claude" | "gateways") => void;
+  onOpen: (dialog: MenuDialog) => void;
 }) {
   const [open, setOpen] = useState(false);
   const box = useRef<HTMLDivElement>(null);
@@ -117,7 +121,7 @@ function SettingsMenu({
       window.removeEventListener("keydown", esc);
     };
   }, [open]);
-  const pick = (d: "company" | "claude" | "gateways") => {
+  const pick = (d: MenuDialog) => {
     setOpen(false);
     onOpen(d);
   };
@@ -138,6 +142,9 @@ function SettingsMenu({
           <button role="menuitem" disabled={!canAdmin} onClick={() => pick("gateways")}>
             🔌 Hermes 연결
             {state.gateways.length > 0 && <span className="count">{state.gateways.length}</span>}
+          </button>
+          <button role="menuitem" disabled={!canAdmin} onClick={() => pick("autostart")}>
+            🖥 컴퓨터 켜면 자동 시작
           </button>
           <label className="menu-field">
             새 직원 기본 모델

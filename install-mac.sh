@@ -60,6 +60,8 @@ else
   say "[1/4] Node.js $(node -v) 가 이미 있습니다."
 fi
 
+NODE_BIN_DIR=$(dirname "$(command -v node)")
+
 # 2. The app itself: latest code, replacing the old copy but never the data.
 say "[2/4] CompanyAI 를 받습니다..."
 tmp=$(mktemp -d)
@@ -84,18 +86,21 @@ fi
 
 # 4. A launcher made here rather than downloaded, so Gatekeeper lets it open with a double-click.
 launcher_body() {
-  # Paths are fixed at install time; the rest is written literally.
+  # Paths are fixed at install time; the rest is written literally. launchd starts jobs with a
+  # bare PATH, so the Node.js found at install time (and the usual Homebrew spots) go first.
   cat <<EOF
 #!/usr/bin/env bash
 # CompanyAI 시작 (설치 프로그램이 만든 파일)
-export PATH="$NODE_DIR/bin:\$PATH"
+export PATH="$NODE_BIN_DIR:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 export COMPANYAI_DATA="$HOME_DIR/data/company.json"
+export COMPANYAI_LAUNCHER="$HOME_DIR/CompanyAI.command"
 PORT_FILE="$HOME_DIR/port"
 cd "$APP" || exit 1
 EOF
   cat <<'LAUNCHER'
 
-open_url() { open "$1" 2>/dev/null || xdg-open "$1" >/dev/null 2>&1; }
+# Auto-start at login sets COMPANYAI_NO_BROWSER so the office doesn't pop open on every login.
+open_url() { [ -n "${COMPANYAI_NO_BROWSER:-}" ] && return 0; open "$1" 2>/dev/null || xdg-open "$1" >/dev/null 2>&1; }
 in_use() { lsof -ti "tcp:$1" -sTCP:LISTEN >/dev/null 2>&1; }
 # Another program (another AI server, say) may already sit on the port; only ours answers this.
 is_ours() { curl -fs --max-time 2 "http://localhost:$1/api/health" 2>/dev/null | grep -q '"companyai"'; }

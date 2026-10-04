@@ -1,5 +1,6 @@
 import { createReadStream, existsSync, statSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { homedir } from "node:os";
 import { dirname, extname, join, normalize, resolve } from "node:path";
 import { type Actor, Company, EngineError } from "../engine/company";
 import Anthropic from "@anthropic-ai/sdk";
@@ -17,6 +18,7 @@ import {
   sessionCookie,
   type User,
 } from "./auth";
+import { AutostartError, disable as disableAutostart, enable as enableAutostart, run as runCommand, status as autostartStatus } from "./autostart";
 import { keyHint, SettingsStore } from "./settings";
 
 try {
@@ -192,6 +194,35 @@ route("DELETE", "/api/settings/claude", async () => {
   streams.announce({ type: "provider", provider: company.provider });
   return claudeStatus();
 }, "owner");
+
+// ------------------------------------------------------------------ auto-start
+
+const autostartEnv = () => ({
+  platform: process.platform,
+  home: homedir(),
+  uid: process.getuid?.() ?? 0,
+  launcher: process.env.COMPANYAI_LAUNCHER,
+  runner: runCommand,
+});
+const autostartGuard = async <T>(fn: () => Promise<T>) => {
+  try {
+    return await fn();
+  } catch (err) {
+    if (err instanceof AutostartError) throw new EngineError(err.message, 409);
+    throw err;
+  }
+};
+route("GET", "/api/settings/autostart", () => autostartStatus(autostartEnv()), "owner");
+route(
+  "PUT",
+  "/api/settings/autostart",
+  async ({ body }) => {
+    const result = await autostartGuard(() => (body.enabled ? enableAutostart(autostartEnv()) : disableAutostart(autostartEnv())));
+    company.note(result.enabled ? "컴퓨터에 로그인하면 CompanyAI가 자동으로 켜지도록 설정했습니다." : "자동 시작을 껐습니다.");
+    return result;
+  },
+  "owner",
+);
 
 route("GET", "/api/users", () => (requireLogin(), auth.users()), "owner");
 route("POST", "/api/users", async ({ body }) => {

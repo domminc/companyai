@@ -14,6 +14,7 @@ import type {
 } from "../../engine/types";
 import type { ActionItemEdit } from "../../engine/company";
 import type { Role, User } from "../../server/auth";
+import type { AutostartStatus } from "../../server/autostart";
 import type {
   HermesJob,
   HermesJobRun,
@@ -41,6 +42,8 @@ export interface ClaudeStatus {
   source: "env" | "app" | "none";
   keyHint?: string;
 }
+
+export type { AutostartStatus };
 
 export interface AuthInfo {
   enabled: boolean;
@@ -93,6 +96,9 @@ export const api = {
   claudeStatus: () => request<ClaudeStatus>("GET", "/settings/claude"),
   setClaudeKey: (apiKey: string) => request<ClaudeStatus>("PUT", "/settings/claude", { apiKey }),
   removeClaudeKey: () => request<ClaudeStatus>("DELETE", "/settings/claude"),
+
+  autostart: () => request<AutostartStatus>("GET", "/settings/autostart"),
+  setAutostart: (enabled: boolean) => request<AutostartStatus>("PUT", "/settings/autostart", { enabled }),
 
   bootstrap: () => request<Bootstrap>("GET", "/state"),
   updateCompany: (patch: { name?: string; mission?: string; defaultModel?: string }) =>
