@@ -1,5 +1,7 @@
 import { useState } from "react";
-import { api, type CompanyState, type Task, type TaskReview, USER_SPEAKER } from "../api";
+import { api, type CompanyState, MAX_FILE_BYTES, type Task, type TaskReview, USER_SPEAKER } from "../api";
+import { useRuntime } from "../runtime";
+import { AttachmentList, PendingFiles } from "./Attachments";
 import { Avatar, ErrorText, Markdown, Modal, StatusBadge, timeAgo, useAction } from "./common";
 
 const COLUMNS: { status: Task["status"]; label: string }[] = [
@@ -163,6 +165,8 @@ export function NewTaskDialog({
   const [assigneeId, setAssigneeId] = useState(initial?.assigneeId ?? state.agents[0]?.id ?? "");
   const [review, setReview] = useState<TaskReview>({ mode: "human" });
   const [dependsOn, setDependsOn] = useState<string[]>([]);
+  const [pending, setPending] = useState<File[]>([]);
+  const { features } = useRuntime();
   const create = useAction();
   const open = state.tasks.filter((t) => t.status !== "done" && t.status !== "failed");
 
@@ -178,7 +182,11 @@ export function NewTaskDialog({
         onSubmit={(e) => {
           e.preventDefault();
           create.run(async () => {
-            await api.createTask({ title, description, acceptance, assigneeId: assigneeId || null, review, dependsOn });
+            const tooBig = pending.find((f) => f.size > MAX_FILE_BYTES);
+            if (tooBig) throw new Error(`${tooBig.name}: 파일은 10MB까지 첨부할 수 있습니다.`);
+            const task = await api.createTask({ title, description, acceptance, assigneeId: assigneeId || null, review, dependsOn });
+            // The task starts right away, so a failed upload must not look like a failed task.
+            for (const f of pending) await api.attachFile(task.id, f);
             onClose();
           });
         }}
@@ -224,6 +232,7 @@ export function NewTaskDialog({
             </select>
           </label>
         )}
+        {features.files && <PendingFiles files={pending} onChange={setPending} />}
         <ErrorText error={create.error} />
         <div className="row end">
           <button type="button" className="btn ghost" onClick={onClose}>
@@ -240,6 +249,7 @@ export function NewTaskDialog({
 
 function TaskDialog({ task, state, onClose, onOpen }: { task: Task; state: CompanyState; onClose: () => void; onOpen: (id: string) => void }) {
   const action = useAction();
+  const { features } = useRuntime();
   const [feedback, setFeedback] = useState("");
   const meeting = state.meetings.find((m) => m.id === task.sourceMeetingId);
   const locked = task.status === "in_progress" || !!task.reviewing;
@@ -288,6 +298,8 @@ function TaskDialog({ task, state, onClose, onOpen }: { task: Task; state: Compa
             ))}
           </div>
         )}
+
+        {features.files && <AttachmentList taskId={task.id} files={task.attachments ?? []} canEdit={!locked} />}
 
         <div className="output">
           {task.output ? (

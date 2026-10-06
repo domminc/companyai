@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, type CompanyState, type LocalHermes } from "../api";
+import { useRuntime } from "../runtime";
 import { ErrorText, Modal, timeAgo, useAction } from "./common";
 
 /** Register Hermes Agent API Servers whose profiles can be hired as employees. */
@@ -10,9 +11,10 @@ export function GatewaysDialog({ state, onClose }: { state: CompanyState; onClos
   const [tested, setTested] = useState<Record<string, string>>({});
   const [local, setLocal] = useState<LocalHermes | null>(null);
   const connect = useAction();
+  const { runtime, features } = useRuntime();
   useEffect(() => {
-    api.localHermes().then(setLocal, () => setLocal(null));
-  }, [state.gateways.length]);
+    if (features.localHermes) api.localHermes().then(setLocal, () => setLocal(null));
+  }, [state.gateways.length, features.localHermes]);
 
   return (
     <Modal title="Hermes 게이트웨이" onClose={onClose} wide>
@@ -25,7 +27,17 @@ export function GatewaysDialog({ state, onClose }: { state: CompanyState; onClos
           게이트웨이에서 <code>API_SERVER_ENABLED=true</code>와 <code>API_SERVER_KEY</code>를 설정하고 <code>hermes gateway</code>로 실행하세요.
         </p>
 
-        {local && !local.connected && (
+        {runtime === "workers" && (
+          <div className="card notice-card">
+            <strong>클라우드에서 쓰는 중입니다</strong>
+            <div className="muted small">
+              Hermes가 내 컴퓨터에 있으면 인터넷에서 닿지 않습니다. Cloudflare Tunnel로 Hermes 주소(예: <code>http://localhost:8642</code>)를 공개 주소로 열어
+              그 주소와 API 키를 아래에 넣으세요: <code>cloudflared tunnel --url http://localhost:8642</code>
+            </div>
+          </div>
+        )}
+
+        {features.localHermes && local && !local.connected && (
           <div className="card local-hermes">
             {local.found ? (
               <>

@@ -1,4 +1,5 @@
 import { type ReactNode, useEffect, useRef, useState } from "react";
+import { useRuntime } from "../runtime";
 import { type AuthInfo, api, type CompanyState, type ModelOption, type OnlineUser } from "../api";
 import { AccountArea } from "./Accounts";
 import { BrandMark } from "./BrandMark";
@@ -109,6 +110,7 @@ function SettingsMenu({
   onOpen: (dialog: MenuDialog) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const { features } = useRuntime();
   const box = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!open) return;
@@ -143,9 +145,11 @@ function SettingsMenu({
             🔌 Hermes 연결
             {state.gateways.length > 0 && <span className="count">{state.gateways.length}</span>}
           </button>
-          <button role="menuitem" disabled={!canAdmin} onClick={() => pick("autostart")}>
-            🖥 컴퓨터 켜면 자동 시작
-          </button>
+          {features.autostart && (
+            <button role="menuitem" disabled={!canAdmin} onClick={() => pick("autostart")}>
+              🖥 컴퓨터 켜면 자동 시작
+            </button>
+          )}
           <label className="menu-field">
             새 직원 기본 모델
             <select value={state.defaultModel} disabled={!canAdmin} onChange={(e) => api.updateCompany({ defaultModel: e.target.value })}>

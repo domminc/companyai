@@ -1,6 +1,7 @@
 import { lazy, Suspense, useEffect, useState } from "react";
 import { type AuthInfo, type OnlineUser } from "./api";
-import { LoginScreen, useAuth } from "./components/Accounts";
+import { FirstSetupScreen, LoginScreen, useAuth } from "./components/Accounts";
+import { RuntimeProvider } from "./runtime";
 import { HermesKanbanView } from "./components/HermesKanbanView";
 import { MeetingsView } from "./components/MeetingsView";
 import { ActivityDrawer, TopBar, useUnread } from "./components/Shell";
@@ -26,9 +27,14 @@ export function App() {
   if (!auth.info) {
     return <div className="loading">{auth.error ? "엔진에 연결하는 중… (npm run dev 로 서버를 켜 주세요)" : "불러오는 중…"}</div>;
   }
+  if (auth.info.setupRequired) return <FirstSetupScreen onDone={auth.setInfo} />;
   if (auth.info.enabled && !auth.info.user) return <LoginScreen onLogin={auth.setInfo} />;
   // A new session (login turned on, someone else signed in) needs a fresh event stream.
-  return <Company key={`${auth.info.enabled}:${auth.info.user?.id ?? ""}`} auth={auth.info} onAuth={auth.setInfo} />;
+  return (
+    <RuntimeProvider key={`${auth.info.enabled}:${auth.info.user?.id ?? ""}`}>
+      <Company auth={auth.info} onAuth={auth.setInfo} />
+    </RuntimeProvider>
+  );
 }
 
 /** 대표's name tag and the teammates who walk around the 3D office. */

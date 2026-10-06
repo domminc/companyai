@@ -5,6 +5,7 @@ import type {
   ChatMessage,
   ChatThread,
   CompanyState,
+  FileRef,
   HermesGateway,
   HireInput,
   Meeting,
@@ -57,7 +58,18 @@ export interface LocalHermes {
 export interface AuthInfo {
   enabled: boolean;
   user: User | null;
+  /** A fresh public deployment: locked until the owner account is made with the setup code. */
+  setupRequired?: boolean;
 }
+
+/** Where the app runs decides what it offers (auto-start and "Hermes on this computer" are Mac-only). */
+export interface RuntimeInfo {
+  runtime: "node" | "workers";
+  features: { autostart: boolean; localHermes: boolean; files: boolean };
+}
+
+export const MAX_FILE_BYTES = 10 * 1024 * 1024;
+export type { FileRef };
 
 /** Fired when the server says the session is gone, so the app can show the login screen. */
 export const LOGGED_OUT_EVENT = "companyai:logged-out";
@@ -92,7 +104,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 
 export const api = {
   me: () => request<AuthInfo>("GET", "/auth/me"),
-  setupLogin: (input: { username: string; password: string; displayName: string }) => request<AuthInfo>("POST", "/auth/setup", input),
+  setupLogin: (input: { username: string; password: string; displayName: string; setupToken?: string }) => request<AuthInfo>("POST", "/auth/setup", input),
   login: (username: string, password: string) => request<AuthInfo>("POST", "/auth/login", { username, password }),
   logout: () => request<{ ok: true }>("POST", "/auth/logout", {}),
   disableLogin: (password: string) => request<AuthInfo>("POST", "/auth/disable", { password }),
@@ -101,6 +113,8 @@ export const api = {
   createUser: (input: { username: string; password: string; displayName: string; role: Role }) => request<User>("POST", "/users", input),
   updateUser: (id: string, patch: { displayName?: string; password?: string; role?: Role }) => request<User>("PATCH", `/users/${id}`, patch),
   deleteUser: (id: string) => request<{ ok: true }>("DELETE", `/users/${id}`),
+
+  runtime: () => request<RuntimeInfo>("GET", "/runtime"),
 
   claudeStatus: () => request<ClaudeStatus>("GET", "/settings/claude"),
   setClaudeKey: (apiKey: string) => request<ClaudeStatus>("PUT", "/settings/claude", { apiKey }),
@@ -146,6 +160,21 @@ export const api = {
   clearChat: (agentId: string) => request<{ ok: true }>("DELETE", `/chats/${agentId}`),
   retryTask: (id: string) => request<Task>("POST", `/tasks/${id}/retry`),
   deleteTask: (id: string) => request<{ ok: true }>("DELETE", `/tasks/${id}`),
+
+  attachFile: async (taskId: string, file: File): Promise<FileRef> => {
+    if (file.size > MAX_FILE_BYTES) throw new Error(`${file.name}: 파일은 ${MAX_FILE_BYTES / 1024 / 1024}MB까지 첨부할 수 있습니다.`);
+    const res = await fetch(`/api/tasks/${taskId}/files?name=${encodeURIComponent(file.name)}`, {
+      method: "POST",
+      headers: { "content-type": file.type || "application/octet-stream" },
+      body: file,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.status === 401 && data.login) window.dispatchEvent(new Event(LOGGED_OUT_EVENT));
+    if (!res.ok) throw new Error(data.error ?? `파일 올리기 실패 (${res.status})`);
+    return data as FileRef;
+  },
+  removeAttachment: (taskId: string, fileId: string) => request<{ ok: true }>("DELETE", `/tasks/${taskId}/files/${fileId}`),
+  attachmentUrl: (taskId: string, fileId: string) => `/api/tasks/${taskId}/files/${fileId}`,
 
   startMeeting: (input: { topic: string; agenda?: string; participantIds: string[]; maxTurnsPerAgent?: number; createTasks?: boolean }) =>
     request<Meeting>("POST", "/meetings", input),

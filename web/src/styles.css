@@ -2051,3 +2051,11 @@ table.people select {
   white-space: pre-wrap;
   word-break: break-all;
 }
+
+/* attachments */
+.attachments { padding: 10px 12px; border: 1px dashed var(--border); border-radius: 12px; background: rgba(255, 255, 255, 0.5); }
+.file-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.file-list li { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.file-list a, .file-list li > span:first-child { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.notice-card { background: var(--surface-2); }
+.file-list a { color: var(--accent); font-weight: 600; }

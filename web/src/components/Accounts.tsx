@@ -86,6 +86,68 @@ export function LoginScreen({ onLogin }: { onLogin: (info: AuthInfo) => void }) 
   );
 }
 
+/** A new cloud deployment is locked until its owner makes the first account with the setup code. */
+export function FirstSetupScreen({ onDone }: { onDone: (info: AuthInfo) => void }) {
+  const [draft, setDraft] = useState({ setupToken: "", username: "", displayName: "", password: "", confirm: "" });
+  const save = useAction();
+  const set = (k: keyof typeof draft) => (e: { target: { value: string } }) => setDraft({ ...draft, [k]: e.target.value });
+  return (
+    <div className="login-screen">
+      <div className="login-main">
+        <div className="login-brand">
+          <BrandMark size={26} />
+          CompanyAI
+        </div>
+        <p className="eyebrow">🚀 처음 설정</p>
+        <h1>
+          소유자 계정 만들기
+          <span>배포 직후 한 번만</span>
+        </h1>
+        <p className="tagline">배포할 때 정한 설정 코드(SETUP_TOKEN)가 있어야 이 회사의 소유자가 될 수 있습니다.</p>
+        <form
+          className="card login-card stack"
+          onSubmit={(e) => {
+            e.preventDefault();
+            save.run(async () => {
+              if (draft.password !== draft.confirm) throw new Error("비밀번호 확인이 일치하지 않습니다.");
+              const { confirm: _confirm, ...input } = draft;
+              onDone(await api.setupLogin(input));
+            });
+          }}
+        >
+          <label>
+            설정 코드
+            <input type="password" value={draft.setupToken} onChange={set("setupToken")} autoComplete="off" autoFocus required />
+          </label>
+          <label>
+            아이디
+            <input value={draft.username} onChange={set("username")} autoComplete="username" required />
+          </label>
+          <label>
+            표시 이름
+            <input value={draft.displayName} onChange={set("displayName")} placeholder="예: 대표" required />
+          </label>
+          <label>
+            비밀번호
+            <input type="password" value={draft.password} onChange={set("password")} autoComplete="new-password" minLength={8} required />
+          </label>
+          <label>
+            비밀번호 확인
+            <input type="password" value={draft.confirm} onChange={set("confirm")} autoComplete="new-password" required />
+          </label>
+          <ErrorText error={save.error} />
+          <button className="btn primary" disabled={save.busy}>
+            시작하기
+          </button>
+        </form>
+      </div>
+      <div className="hero">
+        <CityHero />
+      </div>
+    </div>
+  );
+}
+
 /** Header corner: who's online, and the account menu (or the switch that turns login on). */
 export function AccountArea({ auth, online, onAuth }: { auth: AuthInfo; online: OnlineUser[]; onAuth: (info: AuthInfo) => void }) {
   const [dialog, setDialog] = useState<"setup" | "account" | null>(null);
