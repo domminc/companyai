@@ -65,8 +65,10 @@ curl -fsSL https://raw.githubusercontent.com/domminc/companyai/claude/agent-hiri
 필요한 것: Cloudflare 계정(Workers 유료 플랜 $5/월 권장 — 로그인 암호 해시 계산이 무료 플랜의 CPU 한도에 걸릴 수 있습니다, R2 는 결제 수단 등록 필요), Neon 프로젝트.
 
 ```bash
-CLOUDFLARE_API_TOKEN=... CLOUDFLARE_ACCOUNT_ID=... NEON_DATABASE_URL='postgresql://...' npm run cf:deploy
+npm run cf:deploy     # Cloudflare API 토큰·계정 ID·Neon 주소를 물어봅니다 (토큰은 화면에 안 보이고 저장되지 않습니다)
 ```
+
+Mac·Windows·Linux 모두 됩니다 (Node.js 22 필요). 값을 미리 `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `NEON_DATABASE_URL` 환경 변수로 두면 묻지 않습니다.
 
 R2 버킷·Hyperdrive 만들기, 화면 빌드, 비밀 값 등록, 배포를 한 번에 합니다 (다시 실행해도 안전). 처음 한 번 **설정 코드(SETUP_TOKEN)** 가 출력되고,
 배포된 주소를 열면 이 코드로 소유자 계정을 만드는 화면이 나옵니다. 그 전에는 누구도 앱을 쓸 수 없습니다.

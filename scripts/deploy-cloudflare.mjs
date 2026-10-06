@@ -2,7 +2,11 @@
 /**
  * Puts CompanyAI on Cloudflare in one command. Safe to run again (it updates what exists).
  *
- *   CLOUDFLARE_API_TOKEN=...  CLOUDFLARE_ACCOUNT_ID=...  NEON_DATABASE_URL=postgresql://...  npm run cf:deploy
+ *   npm run cf:deploy
+ *
+ * It asks for the three values it needs (the token is typed hidden and never saved to disk). To skip
+ * the questions, set CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID and NEON_DATABASE_URL beforehand.
+ * Works on Mac, Linux and Windows (needs Node.js 22).
  *
  * It creates the R2 bucket for files and a Hyperdrive config for your Neon database (caching off,
  * because the app writes and reads its own data), builds the UI, and deploys the Worker.
@@ -12,6 +16,7 @@
  * Optional: ANTHROPIC_API_KEY (or enter the key later inside the app), WORKER_NAME (default "companyai").
  */
 import { spawnSync } from "node:child_process";
+import { createInterface } from "node:readline";
 import { randomBytes } from "node:crypto";
 import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -26,6 +31,31 @@ const dryRun = process.argv.includes("--dry-run");
 const CONFIG = join(ROOT, "wrangler.deploy.jsonc");
 const SECRETS = join(ROOT, ".wrangler-secrets.json");
 
+const WIN = process.platform === "win32";
+
+/** Asks on the terminal; `hidden` keeps what is typed off the screen. */
+function ask(question, hidden = false) {
+  return new Promise((resolve) => {
+    const rl = createInterface({ input: process.stdin, output: process.stdout, terminal: true });
+    if (hidden) {
+      rl._writeToOutput = (text) => rl.output.write(text.startsWith(question) ? text : "");
+    }
+    rl.question(question, (answer) => {
+      rl.close();
+      if (hidden) console.log();
+      resolve(answer.trim());
+    });
+  });
+}
+
+async function need(key, question, hidden, hint) {
+  if (env[key]) return;
+  if (!process.stdin.isTTY) fail(`${key} 가 필요합니다. ${hint}`);
+  console.log(`\n${hint}`);
+  env[key] = await ask(`${question}: `, hidden);
+  if (!env[key]) fail(`${key} 값이 비어 있습니다.`);
+}
+
 const say = (m) => console.log(`\n▶ ${m}`);
 function fail(m) {
   console.error(`\n✖ ${m}\n`);
@@ -33,7 +63,7 @@ function fail(m) {
 }
 
 function wrangler(args, { allowFail = false, quiet = false } = {}) {
-  const r = spawnSync("npx", ["--no-install", "wrangler", ...args], { cwd: ROOT, encoding: "utf8", env: { ...env, CI: env.CI ?? "1" } });
+  const r = spawnSync("npx", ["--no-install", "wrangler", ...args], { cwd: ROOT, encoding: "utf8", shell: WIN, env: { ...env, CI: env.CI ?? "1" } });
   const out = `${r.stdout ?? ""}${r.stderr ?? ""}`;
   if (!quiet && out.trim()) console.log(out.trim().split("\n").filter((l) => !/Proxy environment variables/.test(l)).join("\n"));
   if (r.status !== 0 && !allowFail) fail(`wrangler ${args.slice(0, 3).join(" ")} 실패`);
@@ -42,11 +72,12 @@ function wrangler(args, { allowFail = false, quiet = false } = {}) {
 
 // ------------------------------------------------------------------ checks
 if (!dryRun) {
-  if (!env.CLOUDFLARE_API_TOKEN) fail("CLOUDFLARE_API_TOKEN 이 필요합니다 (Cloudflare 대시보드 → My Profile → API Tokens, 템플릿 'Edit Cloudflare Workers' + R2 + Hyperdrive 편집 권한).");
-  if (!env.CLOUDFLARE_ACCOUNT_ID) fail("CLOUDFLARE_ACCOUNT_ID 가 필요합니다 (대시보드 오른쪽 사이드바 또는 Workers & Pages 개요).");
+  await need("CLOUDFLARE_API_TOKEN", "Cloudflare API 토큰 (입력해도 화면에 안 보입니다)", true, "Cloudflare 대시보드 → My Profile → API Tokens 에서 만든 토큰 (Workers·R2·Hyperdrive 편집 권한).");
+  await need("CLOUDFLARE_ACCOUNT_ID", "Cloudflare 계정 ID (32자리)", false, "계정 ID: dash.cloudflare.com 에 로그인했을 때 주소창의 /dash.cloudflare.com/ 바로 뒤 32글자.");
+  await need("NEON_DATABASE_URL", "Neon 연결 주소 (postgresql://…)", true, "Neon 프로젝트 → Connect → 'Connection pooling' 을 끄고 나온 postgresql://… 주소 전체.");
 }
 const neonUrl = (env.NEON_DATABASE_URL || "").trim();
-if (!dryRun && !/^postgres(ql)?:\/\//.test(neonUrl)) fail("NEON_DATABASE_URL 이 필요합니다 (Neon 대시보드 → Connect → 'Pooled connection' 을 끈 직접 연결 주소).");
+if (!dryRun && !/^postgres(ql)?:\/\//.test(neonUrl)) fail("NEON_DATABASE_URL 은 postgresql:// 로 시작하는 주소여야 합니다.");
 if (/-pooler\./.test(neonUrl)) {
   console.warn("! 주소에 -pooler 가 들어 있습니다. Hyperdrive 가 이미 연결 풀을 관리하므로 Neon 의 직접(Direct) 연결 주소를 쓰는 편이 안전합니다.");
 }
@@ -114,7 +145,7 @@ console.log(Object.keys(secrets).length ? `올릴 비밀 값: ${Object.keys(secr
 
 // ------------------------------------------------------------------ build + deploy
 say("화면(UI) 빌드");
-const build = spawnSync("npm", ["run", "build"], { cwd: ROOT, stdio: "inherit" });
+const build = spawnSync("npm", ["run", "build"], { cwd: ROOT, stdio: "inherit", shell: WIN });
 if (build.status !== 0) fail("빌드 실패");
 
 say(dryRun ? "배포 모의 실행" : "Worker 배포");
