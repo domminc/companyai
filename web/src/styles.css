@@ -16,7 +16,7 @@
   --topbar-h: 56px;
   --stage-bg: radial-gradient(900px 520px at 78% 8%, #fbf1c8 0%, rgb(251 241 200 / 0) 62%), linear-gradient(180deg, #d9e5da 0%, #ece9d9 55%, #f1eedf 100%);
   color-scheme: light;
-  font-family: "Pretendard", "Apple SD Gothic Neo", "Noto Sans KR", system-ui, -apple-system, sans-serif;
+  font-family: "Pretendard Variable", Pretendard, "Apple SD Gothic Neo", "Noto Sans KR", system-ui, -apple-system, sans-serif;
   font-size: 14px;
   line-height: 1.55;
   color: var(--text);
