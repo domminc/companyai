@@ -1,0 +1,8 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "lib": ["ES2023"],
+    "types": ["node", "@cloudflare/workers-types"]
+  },
+  "include": ["../worker", "../engine", "../server/app.ts", "../server/auth.ts", "../server/claude.ts", "../server/crypto.ts", "../server/db.ts", "../server/migrations.ts", "../server/pg-store.ts", "../server/persistence.ts", "../server/presence.ts", "../server/settings.ts"]
+}

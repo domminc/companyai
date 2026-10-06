@@ -246,6 +246,15 @@ export class Company {
     return this.llm.name;
   }
 
+  /** Something is running (a task, a meeting, a chat reply) or an employee is out on a Hermes card. */
+  get busy(): boolean {
+    return this.jobs.size > 0 || this.state.agents.some((a) => a.status !== "idle");
+  }
+
+  get hasGateways(): boolean {
+    return this.state.gateways.length > 0;
+  }
+
   /** Switches the brain of every Claude employee, e.g. once an API key is entered. Running work finishes on the old one. */
   setLLM(llm: LLM) {
     this.llm = llm;

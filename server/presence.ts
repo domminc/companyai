@@ -22,6 +22,11 @@ export interface OnlineUser {
 export class Presence {
   private conns = new Set<Connection>();
 
+  /** Open event streams. */
+  get count(): number {
+    return this.conns.size;
+  }
+
   private online(): OnlineUser[] {
     const seen = new Map<string, User>();
     for (const { user } of this.conns) if (user) seen.set(user.id, user);

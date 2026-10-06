@@ -6,7 +6,7 @@
  * HMAC secret that signs session cookies. Sessions are stateless signed tokens that carry the
  * account's session version, so a password change or removal signs every device out.
  */
-import { createHmac, randomBytes, randomUUID, scrypt, timingSafeEqual } from "node:crypto";
+import { createHmac, randomUUID, scrypt, timingSafeEqual } from "node:crypto";
 import { promisify } from "node:util";
 import { FilePersistence, type Persistence } from "./persistence";
 
@@ -56,10 +56,14 @@ function publicUser({ passwordHash, sessionVersion, ...user }: StoredUser): User
   return user;
 }
 
+const randomBytes = (n: number) => Buffer.from(crypto.getRandomValues(new Uint8Array(n)));
+
+const hex = (b: Uint8Array) => Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
+
 async function hashPassword(password: string): Promise<string> {
   const salt = randomBytes(16);
   const hash = await scryptAsync(password, salt, 64);
-  return `scrypt$${salt.toString("hex")}$${hash.toString("hex")}`;
+  return `scrypt$${hex(salt)}$${hex(hash)}`;
 }
 
 async function verifyPassword(password: string, stored: string): Promise<boolean> {
