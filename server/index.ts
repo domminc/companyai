@@ -4,12 +4,17 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { dirname, extname, join, normalize, resolve } from "node:path";
 import { Readable } from "node:stream";
 import { Company } from "../engine/company";
+import type { Store } from "../engine/store";
 import { JsonFileStore } from "../engine/store-file";
 import { createApp } from "./app";
 import { AuthStore } from "./auth";
 import { chooseLLM, claudeEnvFrom } from "./claude";
 import { LocalFileStore } from "./files-local";
 import { localRoutes } from "./local-routes";
+import { createCipher, derivedSecret } from "./crypto";
+import { createDb } from "./db";
+import { migrate } from "./migrations";
+import { PgPersistence, PostgresStore } from "./pg-store";
 import { SettingsStore } from "./settings";
 
 try {
@@ -24,10 +29,31 @@ const DATA_DIR = dirname(DATA_FILE);
 const STATIC_DIR = resolve("dist");
 
 const claude = claudeEnvFrom(process.env);
-const settings = await SettingsStore.openFile(join(DATA_DIR, "settings.json"));
-const auth = await AuthStore.openFile(process.env.COMPANYAI_AUTH ?? join(DATA_DIR, "auth.json"));
 const files = new LocalFileStore(join(DATA_DIR, "files"));
-const company = await Company.open({ llm: chooseLLM(claude, settings), store: new JsonFileStore(DATA_FILE), files });
+
+// DATABASE_URL (a Neon or any Postgres connection string) moves everything but the files into the
+// database; without it, plain files next to the app are used.
+const databaseUrl = process.env.DATABASE_URL?.trim();
+let store: Store;
+let settings: SettingsStore;
+let auth: AuthStore;
+if (databaseUrl) {
+  const appSecret = process.env.APP_SECRET?.trim();
+  if (!appSecret || appSecret.length < 16) {
+    console.error("\n  DATABASE_URL을 쓰려면 APP_SECRET(16자 이상의 긴 임의 문자열)도 필요합니다. 저장되는 API 키를 암호화하는 데 씁니다.\n");
+    process.exit(1);
+  }
+  const db = createDb(databaseUrl, { pool: true });
+  await migrate(db);
+  store = new PostgresStore(db);
+  settings = await SettingsStore.open(new PgPersistence(db, "settings"), await createCipher(appSecret, "settings"));
+  auth = await AuthStore.open(new PgPersistence(db, "auth"), { signingSecret: await derivedSecret(appSecret, "session") });
+} else {
+  store = new JsonFileStore(DATA_FILE);
+  settings = await SettingsStore.openFile(join(DATA_DIR, "settings.json"));
+  auth = await AuthStore.openFile(process.env.COMPANYAI_AUTH ?? join(DATA_DIR, "auth.json"));
+}
+const company = await Company.open({ llm: chooseLLM(claude, settings), store, files });
 
 const app = createApp({
   runtime: "node",
@@ -142,7 +168,7 @@ server.on("error", (err: NodeJS.ErrnoException) => {
 server.listen(PORT, () => {
   console.log(`CompanyAI engine listening on http://localhost:${PORT}`);
   console.log(`  LLM provider: ${company.provider}${company.provider === "mock" ? " (set ANTHROPIC_API_KEY to use Claude)" : ""}`);
-  console.log(`  Data file:    ${DATA_FILE}`);
+  console.log(`  Data:         ${databaseUrl ? "Postgres (DATABASE_URL)" : DATA_FILE}`);
   console.log(`  Login:        ${auth.enabled ? `on (${auth.users().length} accounts)` : "off - create an owner account in the app to turn it on"}`);
 });
 
