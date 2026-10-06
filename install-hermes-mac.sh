@@ -6,7 +6,8 @@
 # 1. installs Hermes Agent with its own official installer (skipped when it is already there),
 # 2. gives it Claude as its model when you have an Anthropic key (asks first; keeps any model you set),
 # 3. turns on its API Server with a fresh key (an existing key is kept),
-# 4. installs and enables the DeskRPG plugin, pinned to a reviewed release, for kanban and cron,
+# 4. installs and enables the DeskRPG plugin, pinned to a reviewed release, for the kanban board. Hermes' own
+#    security scan may block it; the install then carries on without it (the scan is never switched off here),
 # 5. starts the gateway as a background service and checks that CompanyAI can reach it.
 # CompanyAI then finds it by itself: Settings (gear) -> Hermes connection -> connect this computer's Hermes.
 # Safe to run again.
@@ -103,13 +104,28 @@ hermes config set API_SERVER_PORT "$PORT" >/dev/null
 
 # ---------------------------------------------------------------- 4. DeskRPG plugin
 say "[4/5] 칸반·자동화 플러그인(DeskRPG)을 설치합니다..."
+PLUGIN_OK=1
 if hermes plugins list --plain 2>/dev/null | grep -qi 'deskrpg'; then
   note "이미 설치되어 있습니다."
 else
-  hermes plugins install "$PLUGIN_URL" --ref "$PLUGIN_SHA" || die "플러그인 설치에 실패했습니다 (인터넷과 git 이 필요합니다)"
+  rc=0; out=$(hermes plugins install "$PLUGIN_URL" --ref "$PLUGIN_SHA" 2>&1) || rc=$?
+  printf '%s\n' "$out" | sed 's/^/   /'
+  if [ "$rc" -ne 0 ]; then
+    if printf '%s' "$out" | grep -qiE 'blocked|dangerous'; then
+      PLUGIN_OK=0
+      note ""
+      note "Hermes 의 보안 검사가 이 플러그인을 막았습니다 (외부 플러그인이라 경고가 많이 나옵니다)."
+      note "플러그인 없이도 직원 채용·업무 지시·회의·대화는 모두 됩니다. 칸반 보드만 못 씁니다 (자동화 예약은 기본 기능으로 대신 됩니다)."
+      note "이 플러그인은 Hermes 보안 검사를 통과하지 못해서 설치하지 않았습니다. 검사 결과를 읽어 보고 믿을 수 있을 때만 직접 설치하세요."
+    else
+      die "플러그인 설치에 실패했습니다 (인터넷과 git 이 필요합니다)"
+    fi
+  fi
 fi
-hermes plugins enable deskrpg || die "플러그인을 켜지 못했습니다"
-hermes plugins doctor deskrpg 2>&1 | sed 's/^/   /' || true
+if [ "$PLUGIN_OK" = 1 ]; then
+  hermes plugins enable deskrpg || die "플러그인을 켜지 못했습니다"
+  hermes plugins doctor deskrpg 2>&1 | sed 's/^/   /' || true
+fi
 
 # ---------------------------------------------------------------- 5. gateway
 say "[5/5] 게이트웨이를 켭니다..."
@@ -147,6 +163,8 @@ if ! wait_api 45; then
 fi
 if api /deskrpg/info >/dev/null; then
   plugin="플러그인 연결됨"
+elif [ "$PLUGIN_OK" = 0 ]; then
+  plugin="칸반 플러그인 없이 켜짐"
 else
   plugin="플러그인 응답 없음 — 'hermes gateway restart' 후에도 같으면 알려 주세요"
 fi
