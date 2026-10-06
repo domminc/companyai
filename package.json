@@ -12,7 +12,9 @@
     "start": "tsx server/index.ts",
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test \"engine/**/*.test.ts\" \"server/**/*.test.ts\" \"web/src/office/**/*.test.ts\"",
-    "fake-hermes": "tsx engine/testing/fake-hermes.ts"
+    "fake-hermes": "tsx engine/testing/fake-hermes.ts",
+    "cf:dev": "npm run build && wrangler dev",
+    "cf:deploy": "node scripts/deploy-cloudflare.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.128.0",

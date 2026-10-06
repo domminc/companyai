@@ -5,3 +5,5 @@ data/
 *.tmp
 .dev.vars
 .wrangler/
+wrangler.deploy.jsonc
+.wrangler-secrets.json

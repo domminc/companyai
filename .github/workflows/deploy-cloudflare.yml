@@ -1,0 +1,31 @@
+name: Deploy to Cloudflare
+
+# Run it by hand: GitHub → Actions → "Deploy to Cloudflare" → Run workflow.
+# Needs these repository secrets (Settings → Secrets and variables → Actions):
+#   CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID, NEON_DATABASE_URL, APP_SECRET, SETUP_TOKEN
+# and optionally ANTHROPIC_API_KEY (the key can also be entered later inside the app).
+on:
+  workflow_dispatch:
+
+concurrency: deploy-cloudflare
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx tsc --noEmit -p . && npx tsc --noEmit -p worker
+      - run: npm test
+      - run: node scripts/deploy-cloudflare.mjs
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+          APP_SECRET: ${{ secrets.APP_SECRET }}
+          SETUP_TOKEN: ${{ secrets.SETUP_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}

@@ -51,6 +51,34 @@ curl -fsSL https://raw.githubusercontent.com/domminc/companyai/claude/agent-hiri
 
 끝낼 때는 검은 창을 닫으면 됩니다. 회사 데이터는 폴더 안 `data/`에 남아서 다음에 그대로 이어집니다.
 
+## 클라우드에 올리기 — Cloudflare Workers + Neon + R2
+
+컴퓨터를 켜 두지 않고 어디서든 쓰려면 Cloudflare 에 올립니다.
+
+| 무엇 | 어디에 |
+| --- | --- |
+| 앱 서버(엔진) | Cloudflare **Workers** + Durable Object (회사 하나당 하나, 회의·업무 진행을 메모리에서 처리) |
+| 회사 데이터·계정·설정 | **Neon Postgres**, **Hyperdrive** 로 연결 (캐시 끔) |
+| 업무 첨부 파일 | **R2** 버킷 |
+| 화면 | Workers 정적 에셋 |
+
+필요한 것: Cloudflare 계정(Workers 유료 플랜 $5/월 권장 — 로그인 암호 해시 계산이 무료 플랜의 CPU 한도에 걸릴 수 있습니다, R2 는 결제 수단 등록 필요), Neon 프로젝트.
+
+```bash
+CLOUDFLARE_API_TOKEN=... CLOUDFLARE_ACCOUNT_ID=... NEON_DATABASE_URL='postgresql://...' npm run cf:deploy
+```
+
+R2 버킷·Hyperdrive 만들기, 화면 빌드, 비밀 값 등록, 배포를 한 번에 합니다 (다시 실행해도 안전). 처음 한 번 **설정 코드(SETUP_TOKEN)** 가 출력되고,
+배포된 주소를 열면 이 코드로 소유자 계정을 만드는 화면이 나옵니다. 그 전에는 누구도 앱을 쓸 수 없습니다.
+GitHub 에서 하려면 저장소 Secrets 에 `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `NEON_DATABASE_URL`, `APP_SECRET`, `SETUP_TOKEN` 을 넣고 Actions → *Deploy to Cloudflare* 를 실행하세요.
+
+- `APP_SECRET`: 앱에서 넣은 Claude 키를 암호화하고 로그인 쿠키에 서명합니다. 바꾸면 저장된 키·로그인이 풀립니다.
+- Claude 키는 `ANTHROPIC_API_KEY` 로 넣거나, 배포 후 앱의 설정(⚙)에서 넣으면 됩니다.
+- 내 컴퓨터에서 미리 보기: Postgres 를 하나 띄우고 `.dev.vars` 에 `APP_SECRET`, `SETUP_TOKEN` 을 적은 뒤 `npm run cf:dev`.
+- **Hermes**: 클라우드의 앱은 내 Mac 의 `localhost` 에 닿지 못합니다. Mac 에서 `cloudflared tunnel --url http://localhost:8642` 로 공개 주소를 만들어 그 주소와 API 키를 연결하세요.
+- 제한: 서버가 한동안 쉬어도 데이터는 모두 Postgres 에 저장되며, 15분 넘게 이어지는 한 번의 작업이 중간에 끊기면 대기열로 되돌아갑니다. 첨부 파일은 파일당 10MB, 업무당 10개까지.
+- Mac 서버에서도 `DATABASE_URL`(+`APP_SECRET`)을 설정하면 같은 Neon 데이터베이스를 쓸 수 있습니다.
+
 ## 빠른 시작 (개발자용)
 
 ```bash
@@ -171,7 +199,11 @@ engine/            # UI와 무관한 순수 엔진 (다른 앱에서도 import �
   types.ts         # Agent, Task, Meeting, CompanyEvent ...
   *.test.ts        # 엔진·회의 발언권·Hermes 연동 테스트
   testing/         # 가짜 Hermes 게이트웨이, 스크립트 LLM
-server/index.ts    # REST API + SSE(/api/events) + 빌드된 UI 서빙 + 권한 검사 + 접속자
+server/app.ts      # 서버 본체: Request→Response 라우터 (REST + SSE + 권한 + 파일), Node·Workers 공용
+server/index.ts    # Node 서버 (Mac): app.ts 를 http 로 연결, JSON 파일 또는 DATABASE_URL(Postgres) 저장
+server/pg-store.ts # Postgres 저장소 (바뀐 행만 기록) · db.ts · migrations.ts (자동 마이그레이션)
+worker/index.ts    # Cloudflare Worker + Durable Object · files-r2.ts (R2 파일 저장)
+scripts/deploy-cloudflare.mjs # 한 줄 배포 (R2·Hyperdrive 만들기 + 배포)
 server/auth.ts     # 선택적 로그인: 계정·역할·서명 쿠키
 server/settings.ts # 앱에서 넣은 Anthropic API 키 (data/settings.json)
 server/autostart.ts # Mac 자동 시작 (launchd LaunchAgent 쓰기·지우기, caffeinate)
