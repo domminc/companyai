@@ -39,9 +39,11 @@ import {
   RECRUITER_SYSTEM,
   recruitPrompt,
   SECRETARY_SYSTEM,
+  type AttachmentForPrompt,
   taskPrompt,
   workplaceContext,
 } from "./prompts";
+import { type FileStore, isTextual, MAX_FILE_BYTES, safeName } from "./files";
 import { MemoryStore, type Store } from "./store";
 import {
   AGENT_TOOLS,
@@ -53,6 +55,7 @@ import {
   type ChatThread,
   type CompanyEvent,
   type CompanyState,
+  type FileRef,
   type FloorVia,
   type HermesGateway,
   type HireInput,
@@ -66,6 +69,10 @@ import {
 } from "./types";
 
 const MAX_ACTIVITY = 200;
+const MAX_ATTACHMENTS = 10;
+/** How much of one text attachment, and of all of them, goes into an agent's prompt. */
+const MAX_PROMPT_FILE_CHARS = 60_000;
+const MAX_PROMPT_FILE_CHARS_TOTAL = 150_000;
 /** Parallel polls per meeting step; Hermes rejects runs above its concurrency cap. */
 const MAX_CONCURRENT_POLLS = 4;
 
@@ -127,6 +134,8 @@ export interface CompanyOptions {
   store?: Store;
   /** Injected into Hermes clients (tests use a fake gateway). */
   hermesFetch?: typeof fetch;
+  /** Where attachments are kept. Without it, files can't be attached. */
+  files?: FileStore;
 }
 
 interface Minutes {
@@ -222,10 +231,11 @@ export class Company {
     private llm: LLM,
     private store: Store,
     private hermesFetch?: typeof fetch,
+    private files?: FileStore,
   ) {}
 
   static async open(opts: CompanyOptions): Promise<Company> {
-    const company = new Company(opts.llm, opts.store ?? new MemoryStore(), opts.hermesFetch);
+    const company = new Company(opts.llm, opts.store ?? new MemoryStore(), opts.hermesFetch, opts.files);
     const saved = await company.store.load();
     if (saved) company.state = recoverInterrupted({ ...emptyState(), ...saved });
     company.dispatch();
@@ -822,6 +832,8 @@ export class Company {
     const task = this.getTask(taskId);
     if (task.status === "in_progress" || task.reviewing) throw new EngineError("진행 중인 업무는 삭제할 수 없습니다.", 409);
     this.state.tasks = this.state.tasks.filter((t) => t.id !== taskId);
+    const keys = (task.attachments ?? []).map((a) => a.key);
+    if (keys.length && this.files) void this.files.delete(keys).catch((err) => console.error("failed to delete attachments", err));
     for (const other of this.state.tasks) {
       if (!other.dependsOn.includes(taskId)) continue;
       other.dependsOn = other.dependsOn.filter((id) => id !== taskId);
@@ -830,6 +842,96 @@ export class Company {
     this.emit({ type: "task.deleted", taskId });
     this.persist();
     this.dispatch();
+  }
+
+  // ------------------------------------------------------------ attachments
+
+  private requireFiles(): FileStore {
+    if (!this.files) throw new EngineError("이 서버에는 파일 저장소가 설정되어 있지 않습니다.", 501);
+    return this.files;
+  }
+
+  async addAttachment(taskId: string, input: { name: string; contentType?: string; data: Uint8Array }): Promise<FileRef> {
+    const files = this.requireFiles();
+    const task = this.getTask(taskId);
+    if (!input.data.byteLength) throw new EngineError("빈 파일은 첨부할 수 없습니다.");
+    if (input.data.byteLength > MAX_FILE_BYTES) throw new EngineError(`파일은 ${MAX_FILE_BYTES / 1024 / 1024}MB까지 첨부할 수 있습니다.`, 413);
+    if ((task.attachments?.length ?? 0) >= MAX_ATTACHMENTS) throw new EngineError(`업무마다 파일을 ${MAX_ATTACHMENTS}개까지 붙일 수 있습니다.`, 409);
+    const id = newId("fil");
+    const name = safeName(input.name);
+    const ref: FileRef = {
+      id,
+      name,
+      size: input.data.byteLength,
+      contentType: input.contentType?.split(";")[0].trim() || "application/octet-stream",
+      key: `tasks/${taskId}/${id}/${name}`,
+      addedAt: now(),
+      addedBy: actorContext.getStore()?.name,
+    };
+    await files.put(ref.key, input.data, { contentType: ref.contentType });
+    // The task may have been deleted while the upload was in flight.
+    if (!this.state.tasks.includes(task)) {
+      await files.delete(ref.key);
+      throw new EngineError("업무가 그 사이에 삭제되었습니다.", 409);
+    }
+    (task.attachments ??= []).push(ref);
+    task.updatedAt = now();
+    this.emit({ type: "task.updated", task });
+    this.log(`"${task.title}" 업무에 파일 "${name}"을(를) 붙였습니다.`);
+    this.persist();
+    return ref;
+  }
+
+  async getAttachment(taskId: string, fileId: string): Promise<{ ref: FileRef; data: Uint8Array; contentType: string }> {
+    const files = this.requireFiles();
+    const ref = this.getTask(taskId).attachments?.find((a) => a.id === fileId);
+    if (!ref) throw new EngineError("첨부 파일을 찾을 수 없습니다.", 404);
+    const file = await files.get(ref.key);
+    if (!file) throw new EngineError("파일 저장소에서 파일을 찾지 못했습니다.", 404);
+    return { ref, data: file.data, contentType: ref.contentType || file.contentType };
+  }
+
+  async removeAttachment(taskId: string, fileId: string) {
+    const files = this.requireFiles();
+    const task = this.getTask(taskId);
+    const ref = task.attachments?.find((a) => a.id === fileId);
+    if (!ref) throw new EngineError("첨부 파일을 찾을 수 없습니다.", 404);
+    task.attachments = task.attachments!.filter((a) => a !== ref);
+    task.updatedAt = now();
+    this.emit({ type: "task.updated", task });
+    this.persist();
+    await files.delete(ref.key);
+  }
+
+  /** The attachments an agent gets: text files in full (within limits), the rest by name. */
+  private async attachmentsForPrompt(task: Task): Promise<AttachmentForPrompt[]> {
+    const out: AttachmentForPrompt[] = [];
+    let budget = MAX_PROMPT_FILE_CHARS_TOTAL;
+    for (const ref of task.attachments ?? []) {
+      if (!isTextual(ref.name, ref.contentType)) {
+        out.push({ name: ref.name, note: "텍스트가 아니라 내용은 포함하지 않았습니다" });
+        continue;
+      }
+      try {
+        const file = await this.files?.get(ref.key);
+        if (!file) {
+          out.push({ name: ref.name, note: "파일을 불러오지 못했습니다" });
+          continue;
+        }
+        let text = new TextDecoder().decode(file.data);
+        const cap = Math.min(MAX_PROMPT_FILE_CHARS, budget);
+        if (cap <= 0) {
+          out.push({ name: ref.name, note: "분량 제한으로 내용을 포함하지 않았습니다" });
+          continue;
+        }
+        if (text.length > cap) text = `${text.slice(0, cap)}\n…(분량 제한으로 여기까지만 전달됨)`;
+        budget -= text.length;
+        out.push({ name: ref.name, text });
+      } catch {
+        out.push({ name: ref.name, note: "파일을 불러오지 못했습니다" });
+      }
+    }
+    return out;
   }
 
   /** 대표 signs off (or sends back) a task waiting in review. */
@@ -1198,7 +1300,7 @@ export class Company {
         {
           identity: agentIdentity(agent),
           instructions: workplaceContext(agent, this.state),
-          prompt: taskPrompt(task, sourceMeeting),
+          prompt: taskPrompt(task, sourceMeeting, await this.attachmentsForPrompt(task)),
           effort: "high",
           context: { kind: "task", agentName: agent.name, role: agent.role, title: task.title },
         },

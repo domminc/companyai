@@ -7,7 +7,7 @@ import { atLeast, AuthError, AuthStore, FailureLimiter, readCookie } from "./aut
 
 async function store() {
   const dir = await mkdtemp(join(tmpdir(), "companyai-auth-"));
-  return { file: join(dir, "auth.json"), auth: await AuthStore.open(join(dir, "auth.json")) };
+  return { file: join(dir, "auth.json"), auth: await AuthStore.openFile(join(dir, "auth.json")) };
 }
 
 test("login is off until an owner exists; the owner signs in with a session that survives a restart", async () => {
@@ -24,7 +24,7 @@ test("login is off until an owner exists; the owner signs in with a session that
   assert.equal((await stat(file)).mode & 0o777, 0o600);
 
   const { token } = auth.issue(owner.id);
-  const reopened = await AuthStore.open(file);
+  const reopened = await AuthStore.openFile(file);
   assert.equal(reopened.verify(token)?.id, owner.id);
   assert.equal(reopened.verify(token.replace(/.$/, (c) => (c === "A" ? "B" : "A"))), undefined, "tampered token");
   assert.equal(reopened.verify(`${owner.id}.1.1.x`), undefined);

@@ -72,6 +72,18 @@ export interface ReviewRecord {
   at: string;
 }
 
+/** A file kept in the file store (R2 on Cloudflare) and attached to a task. */
+export interface FileRef {
+  id: string;
+  name: string;
+  size: number;
+  contentType: string;
+  /** Where the bytes live in the file store. */
+  key: string;
+  addedAt: string;
+  addedBy?: string;
+}
+
 export interface Task {
   id: string;
   title: string;
@@ -96,6 +108,8 @@ export interface Task {
   previousOutput?: string;
   /** An AI reviewer is looking at it right now. */
   reviewing?: boolean;
+  /** Reference material for whoever does the work. Text files are put in their prompt. */
+  attachments?: FileRef[];
   createdAt: string;
   updatedAt: string;
 }

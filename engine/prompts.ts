@@ -33,7 +33,14 @@ export function workplaceContext(agent: Agent, state: CompanyState): string {
     .join("\n");
 }
 
-export function taskPrompt(task: Task, sourceMeeting?: Meeting): string {
+/** An attached file as the agent sees it: its text, or a note on why there is none. */
+export interface AttachmentForPrompt {
+  name: string;
+  text?: string;
+  note?: string;
+}
+
+export function taskPrompt(task: Task, sourceMeeting?: Meeting, attachments: AttachmentForPrompt[] = []): string {
   const parts = [`You have been assigned a task.`, "", `# ${task.title}`, "", task.description || "(no further description)"];
   if (sourceMeeting) {
     parts.push(
@@ -44,6 +51,13 @@ export function taskPrompt(task: Task, sourceMeeting?: Meeting): string {
     );
   }
   if (task.acceptance) parts.push("", `Done means: ${task.acceptance}`);
+  if (attachments.length) {
+    parts.push("", "Reference files were attached to this task:");
+    for (const a of attachments) {
+      if (a.text !== undefined) parts.push(`<file name="${a.name.replace(/"/g, "'")}">`, a.text.replace(/<\/file>/g, "<\\/file>"), "</file>");
+      else parts.push(`- ${a.name}${a.note ? ` (${a.note})` : ""}`);
+    }
+  }
   const feedback = task.reviews.filter((r) => r.verdict === "changes").at(-1);
   if (task.revision > 0 && feedback) {
     parts.push(

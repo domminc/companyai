@@ -1,26 +1,16 @@
+/** The Node server: for a Mac (or any computer). The Cloudflare version is in worker/. */
 import { createReadStream, existsSync, statSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { homedir } from "node:os";
 import { dirname, extname, join, normalize, resolve } from "node:path";
-import { type Actor, Company, EngineError } from "../engine/company";
-import Anthropic from "@anthropic-ai/sdk";
-import { AnthropicLLM, AVAILABLE_MODELS, DEFAULT_MODEL, describeError, type LLM, MockLLM } from "../engine/llm";
-import { JsonFileStore } from "../engine/store";
-import {
-  atLeast,
-  AuthError,
-  AuthStore,
-  clearedCookie,
-  FailureLimiter,
-  readCookie,
-  type Role,
-  SESSION_COOKIE,
-  sessionCookie,
-  type User,
-} from "./auth";
-import { AutostartError, disable as disableAutostart, enable as enableAutostart, run as runCommand, status as autostartStatus } from "./autostart";
-import { discoverLocalHermes, sameGateway } from "./hermes-local";
-import { keyHint, SettingsStore } from "./settings";
+import { Readable } from "node:stream";
+import { Company } from "../engine/company";
+import { JsonFileStore } from "../engine/store-file";
+import { createApp } from "./app";
+import { AuthStore } from "./auth";
+import { chooseLLM, claudeEnvFrom } from "./claude";
+import { LocalFileStore } from "./files-local";
+import { localRoutes } from "./local-routes";
+import { SettingsStore } from "./settings";
 
 try {
   process.loadEnvFile();
@@ -30,405 +20,73 @@ try {
 
 const PORT = Number(process.env.PORT ?? 8787);
 const DATA_FILE = resolve(process.env.COMPANYAI_DATA ?? "data/company.json");
+const DATA_DIR = dirname(DATA_FILE);
 const STATIC_DIR = resolve("dist");
 
-const settings = await SettingsStore.open(join(dirname(DATA_FILE), "settings.json"));
-const mockDelay = Number(process.env.COMPANYAI_MOCK_DELAY_MS ?? 25);
-const envHasKey = !!(process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN);
+const claude = claudeEnvFrom(process.env);
+const settings = await SettingsStore.openFile(join(DATA_DIR, "settings.json"));
+const auth = await AuthStore.openFile(process.env.COMPANYAI_AUTH ?? join(DATA_DIR, "auth.json"));
+const files = new LocalFileStore(join(DATA_DIR, "files"));
+const company = await Company.open({ llm: chooseLLM(claude, settings), store: new JsonFileStore(DATA_FILE), files });
 
-/** Where Claude's key comes from: .env (wins), the key entered in the app, or none (demo mode). */
-function claudeSource(): "env" | "app" | "none" {
-  if (process.env.COMPANYAI_PROVIDER === "mock") return "none";
-  if (envHasKey || process.env.COMPANYAI_PROVIDER === "anthropic") return "env";
-  return settings.anthropicApiKey ? "app" : "none";
-}
-
-function chooseLLM(): LLM {
-  const source = claudeSource();
-  if (source === "env") return new AnthropicLLM();
-  if (source === "app") return new AnthropicLLM(new Anthropic({ apiKey: settings.anthropicApiKey }));
-  return new MockLLM(mockDelay);
-}
-
-const company = await Company.open({ llm: chooseLLM(), store: new JsonFileStore(DATA_FILE) });
-const auth = await AuthStore.open(process.env.COMPANYAI_AUTH ?? join(dirname(DATA_FILE), "auth.json"));
-const loginLimiter = new FailureLimiter();
-
-// ------------------------------------------------------------------ routing
-
-interface Ctx {
-  params: Record<string, string>;
-  body: any;
-  /** The signed-in person; undefined while login is off. */
-  user?: User;
-  req: IncomingMessage;
-  res: ServerResponse;
-}
-type Handler = (ctx: Ctx) => unknown | Promise<unknown>;
-/** Who may call a route when login is on. By default reads need a viewer, changes a member. */
-type Access = Role | "public";
-const routes: { method: string; pattern: RegExp; keys: string[]; handler: Handler; access: Access }[] = [];
-
-function route(method: string, path: string, handler: Handler, access?: Access) {
-  const keys: string[] = [];
-  const pattern = new RegExp(
-    "^" + path.replace(/:(\w+)/g, (_, k) => (keys.push(k), "([^/]+)")) + "$",
-  );
-  routes.push({ method, pattern, keys, handler, access: access ?? (method === "GET" ? "viewer" : "member") });
-}
-
-function actorOf(user?: User): Actor | undefined {
-  return user && { name: user.displayName, owner: user.role === "owner" };
-}
-
-// ------------------------------------------------------------------ accounts
-
-function isSecure(req: IncomingMessage) {
-  return req.headers["x-forwarded-proto"] === "https";
-}
-
-function signIn(ctx: Ctx, user: User) {
-  const { token, maxAge } = auth.issue(user.id);
-  ctx.res.setHeader("set-cookie", sessionCookie(token, maxAge, isSecure(ctx.req)));
-}
-
-/** Lets the launcher tell this app apart from whatever else might be on the port. */
-route("GET", "/api/health", () => ({ app: "companyai" }), "public");
-route("GET", "/api/auth/me", ({ user }) => ({ enabled: auth.enabled, user: user ?? null }), "public");
-route(
-  "POST",
-  "/api/auth/setup",
-  async (ctx) => {
-    const user = await auth.setup(ctx.body);
-    // Tabs that were open without login lose their stream and land on the login screen.
-    presence.closeAll();
-    signIn(ctx, user);
-    company.as(actorOf(user), () => company.note(`${user.displayName}님이 소유자 계정을 만들어 로그인을 켰습니다.`));
-    return { enabled: true, user };
-  },
-  "public",
-);
-route(
-  "POST",
-  "/api/auth/login",
-  async (ctx) => {
-    const key = ctx.req.socket.remoteAddress ?? "?";
-    loginLimiter.check(key);
-    try {
-      const user = await auth.login(ctx.body.username, ctx.body.password);
-      loginLimiter.reset(key);
-      signIn(ctx, user);
-      return { enabled: true, user };
-    } catch (err) {
-      loginLimiter.fail(key);
-      throw err;
-    }
-  },
-  "public",
-);
-route(
-  "POST",
-  "/api/auth/logout",
-  ({ res }) => {
-    res.setHeader("set-cookie", clearedCookie());
-    return { ok: true };
-  },
-  "public",
-);
-route(
-  "POST",
-  "/api/auth/disable",
-  async ({ user, body, res }) => {
-    if (!user) throw new AuthError("로그인이 이미 꺼져 있습니다.");
-    await auth.disable(user.id, body.password);
-    res.setHeader("set-cookie", clearedCookie());
-    company.note(`${user.displayName}님이 로그인을 껐습니다. 이제 누구나 바로 들어올 수 있습니다.`);
-    presence.closeAll();
-    return { enabled: false, user: null };
-  },
-  "owner",
-);
-route("PATCH", "/api/auth/me", async ({ user, body }) => {
-  if (!user) throw new AuthError("로그인이 꺼져 있습니다.");
-  const updated = await auth.update(user.id, { displayName: body.displayName, password: body.password });
-  presence.refresh(updated);
-  return updated;
-}, "viewer");
-
-/** Accounts only make sense once there is an owner to manage them. */
-function requireLogin() {
-  if (!auth.enabled) throw new AuthError("먼저 🔐 로그인 설정에서 소유자 계정을 만드세요.", 409);
-}
-
-// ------------------------------------------------------------------ Claude key
-
-function claudeStatus() {
-  const source = claudeSource();
-  return { provider: company.provider, source, ...(source === "app" ? { keyHint: keyHint(settings.anthropicApiKey!) } : {}) };
-}
-
-route("GET", "/api/settings/claude", () => claudeStatus());
-route("PUT", "/api/settings/claude", async ({ body }) => {
-  if (claudeSource() === "env") throw new EngineError("서버의 .env에 있는 키를 쓰고 있습니다. 바꾸려면 .env를 고치세요.", 409);
-  const apiKey = typeof body.apiKey === "string" ? body.apiKey.trim() : "";
-  if (!apiKey) throw new EngineError("API 키를 입력하세요.");
-  const client = new Anthropic({ apiKey });
-  try {
-    await client.models.retrieve(DEFAULT_MODEL); // cheap check that the key works
-  } catch (err) {
-    if (err instanceof Anthropic.AuthenticationError || err instanceof Anthropic.PermissionDeniedError) {
-      throw new EngineError("이 API 키로 Claude에 연결할 수 없습니다. 키를 다시 확인하세요.", 400);
-    }
-    throw new EngineError(`키를 확인하지 못했습니다: ${describeError(err)}`, 502);
-  }
-  await settings.setAnthropicApiKey(apiKey);
-  company.setLLM(new AnthropicLLM(client));
-  company.note("Claude API 키를 등록했습니다. 이제 Claude 직원들이 실제로 일합니다.");
-  streams.announce({ type: "provider", provider: company.provider });
-  return claudeStatus();
-}, "owner");
-route("DELETE", "/api/settings/claude", async () => {
-  if (claudeSource() === "env") throw new EngineError("서버의 .env에 있는 키는 앱에서 지울 수 없습니다.", 409);
-  await settings.setAnthropicApiKey(undefined);
-  company.setLLM(new MockLLM(mockDelay));
-  company.note("Claude API 키를 지웠습니다. 데모 모드로 돌아갑니다.");
-  streams.announce({ type: "provider", provider: company.provider });
-  return claudeStatus();
-}, "owner");
-
-// ------------------------------------------------------------ Hermes on this computer
-
-route(
-  "GET",
-  "/api/hermes/local",
-  async () => {
-    const { key: _key, ...local } = await discoverLocalHermes({ home: homedir() });
-    const connected = !!local.url && company.snapshot().gateways.some((g) => sameGateway(g.url, local.url!));
-    return { ...local, connected };
-  },
-  "owner",
-);
-route(
-  "POST",
-  "/api/hermes/local/connect",
-  async () => {
-    const local = await discoverLocalHermes({ home: homedir() });
-    if (!local.found || !local.url || !local.key) {
-      throw new EngineError("이 컴퓨터에서 설정된 Hermes를 찾지 못했습니다. 설치 명령을 먼저 실행해 주세요.", 404);
-    }
-    const existing = company.snapshot().gateways.find((g) => sameGateway(g.url, local.url!));
-    if (existing) return existing;
-    return company.addGateway({ name: "이 컴퓨터의 Hermes", url: local.url, apiKey: local.key });
-  },
-  "owner",
-);
-
-// ------------------------------------------------------------------ auto-start
-
-const autostartEnv = () => ({
-  platform: process.platform,
-  home: homedir(),
-  uid: process.getuid?.() ?? 0,
-  launcher: process.env.COMPANYAI_LAUNCHER,
-  runner: runCommand,
-});
-const autostartGuard = async <T>(fn: () => Promise<T>) => {
-  try {
-    return await fn();
-  } catch (err) {
-    if (err instanceof AutostartError) throw new EngineError(err.message, 409);
-    throw err;
-  }
-};
-route("GET", "/api/settings/autostart", () => autostartStatus(autostartEnv()), "owner");
-route(
-  "PUT",
-  "/api/settings/autostart",
-  async ({ body }) => {
-    const result = await autostartGuard(() => (body.enabled ? enableAutostart(autostartEnv()) : disableAutostart(autostartEnv())));
-    company.note(result.enabled ? "컴퓨터에 로그인하면 CompanyAI가 자동으로 켜지도록 설정했습니다." : "자동 시작을 껐습니다.");
-    return result;
-  },
-  "owner",
-);
-
-route("GET", "/api/users", () => (requireLogin(), auth.users()), "owner");
-route("POST", "/api/users", async ({ body }) => {
-  requireLogin();
-  const created = await auth.create(body);
-  company.note(`${created.displayName}님(${created.role})의 계정을 만들었습니다.`);
-  return created;
-}, "owner");
-route("PATCH", "/api/users/:id", async ({ params, body }) => {
-  requireLogin();
-  const updated = await auth.update(params.id, body);
-  presence.refresh(updated);
-  if (body.password !== undefined) presence.close(params.id);
-  return updated;
-}, "owner");
-route("DELETE", "/api/users/:id", async ({ params, user }) => {
-  requireLogin();
-  const target = auth.get(params.id);
-  await auth.remove(params.id);
-  presence.close(params.id);
-  if (params.id === user?.id) presence.closeAll();
-  if (target) company.note(`${target.displayName}님의 계정을 지웠습니다.`);
-  return { ok: true };
-}, "owner");
-
-route("GET", "/api/state", () => ({
-  state: company.snapshot(),
-  provider: company.provider,
-  models: AVAILABLE_MODELS,
-}));
-route("PATCH", "/api/company", ({ body }) => (company.updateCompany(body), company.snapshot()), "owner");
-
-route("POST", "/api/recruit", ({ body }) => company.recruit(String(body.jobDescription ?? "")));
-route("GET", "/api/gateways", () => company.snapshot().gateways);
-route("POST", "/api/gateways", ({ body }) => company.addGateway(body), "owner");
-route("POST", "/api/gateways/:id/test", ({ params }) => company.testGateway(params.id));
-route("DELETE", "/api/gateways/:id", ({ params }) => (company.removeGateway(params.id), { ok: true }), "owner");
-
-route("POST", "/api/agents", async ({ body }) => {
-  if (body.hermes) await company.verifyHermesProfile(body.hermes);
-  return company.hire(body);
-});
-route("PATCH", "/api/agents/:id", ({ params, body }) => company.updateAgent(params.id, body));
-route("DELETE", "/api/agents/:id", ({ params }) => (company.fire(params.id), { ok: true }), "owner");
-
-// Hermes employees' automations (cron jobs on their profile)
-route("GET", "/api/agents/:id/automations", ({ params }) => company.listAutomations(params.id));
-route("POST", "/api/agents/:id/automations", ({ params, body }) => company.createAutomation(params.id, body));
-route("PATCH", "/api/agents/:id/automations/:job", ({ params, body }) => company.updateAutomation(params.id, params.job, body));
-route("DELETE", "/api/agents/:id/automations/:job", async ({ params }) => (await company.automationAction(params.id, params.job, "delete"), { ok: true }));
-route("GET", "/api/agents/:id/automations/:job/runs", ({ params }) => company.automationRuns(params.id, params.job));
-route("POST", "/api/agents/:id/automations/:job/:action", async ({ params }) => {
-  const action = params.action;
-  if (action !== "pause" && action !== "resume" && action !== "run") throw new EngineError(`알 수 없는 동작: ${action}`, 404);
-  await company.automationAction(params.id, params.job, action);
-  return { ok: true };
+const app = createApp({
+  runtime: "node",
+  company,
+  auth,
+  settings,
+  claude,
+  files,
+  extraRoutes: localRoutes,
+  features: { autostart: true, localHermes: true },
 });
 
-// The gateway's Hermes kanban (DeskRPG plugin)
-const kanban = "/api/gateways/:id/kanban";
-route("GET", kanban, ({ params }) => company.kanbanOverview(params.id));
-route("POST", `${kanban}/boards`, ({ params, body }) => company.kanbanCreateBoard(params.id, body));
-route("GET", `${kanban}/boards/:board`, ({ params }) => company.kanbanBoard(params.id, params.board));
-route("POST", `${kanban}/boards/:board/cards`, ({ params, body }) => company.kanbanCreateCard(params.id, params.board, body));
-route("GET", `${kanban}/boards/:board/cards/:card`, ({ params }) => company.kanbanCard(params.id, params.board, params.card));
-route("DELETE", `${kanban}/boards/:board/cards/:card`, ({ params }) => company.kanbanDeleteCard(params.id, params.board, params.card));
-route("POST", `${kanban}/boards/:board/cards/:card/comments`, ({ params, body }) =>
-  company.kanbanComment(params.id, params.board, params.card, String(body.body ?? "")),
-);
-route("POST", `${kanban}/boards/:board/cards/:card/actions/:action`, ({ params, body }) =>
-  company.kanbanAction(params.id, params.board, params.card, params.action as never, body ?? {}),
-);
+// ------------------------------------------------------------- Node <-> Web
 
-route("POST", "/api/tasks", ({ body }) => company.createTask(body));
-route("PATCH", "/api/tasks/:id", ({ params, body }) => company.updateTask(params.id, body));
-route("POST", "/api/tasks/:id/retry", ({ params }) => company.retryTask(params.id));
-route("DELETE", "/api/tasks/:id", ({ params }) => (company.deleteTask(params.id), { ok: true }));
-route("POST", "/api/tasks/:id/review", ({ params, body }) =>
-  company.reviewTask(params.id, { approve: body.approve === true, comment: body.comment }),
-);
-
-route("POST", "/api/chats/:agentId", ({ params, body }) => company.chat(params.agentId, String(body.content ?? "")));
-route("DELETE", "/api/chats/:agentId", ({ params }) => (company.clearChat(params.agentId), { ok: true }));
-
-route("POST", "/api/meetings", ({ body }) => company.startMeeting(body));
-route("POST", "/api/meetings/:id/cancel", ({ params }) => company.cancelMeeting(params.id));
-route("POST", "/api/meetings/:id/messages", ({ params, body }) => company.postMeetingMessage(params.id, String(body.content ?? "")));
-route("POST", "/api/meetings/:id/grant", ({ params, body }) => company.grantFloor(params.id, String(body.agentId ?? "")));
-route("POST", "/api/meetings/:id/end", ({ params }) => company.endMeeting(params.id));
-route("POST", "/api/meetings/:id/join", ({ params, body }) => company.joinMeeting(params.id, body.joined !== false));
-route("POST", "/api/meetings/:id/outcome", ({ params, body }) => company.registerOutcome(params.id, body));
-route("POST", "/api/meetings/:id/action-items/:index/promote", ({ params }) =>
-  company.promoteActionItem(params.id, Number(params.index)),
-);
-
-function sendJSON(res: ServerResponse, status: number, data: unknown) {
-  res.writeHead(status, { "content-type": "application/json; charset=utf-8" });
-  res.end(JSON.stringify(data));
-}
-
-async function readBody(req: IncomingMessage): Promise<any> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of req) chunks.push(chunk as Buffer);
-  if (!chunks.length) return {};
-  try {
-    return JSON.parse(Buffer.concat(chunks).toString("utf8"));
-  } catch {
-    throw new EngineError("요청 본문이 올바른 JSON이 아닙니다.");
+function toRequest(req: IncomingMessage, signal: AbortSignal): Request {
+  const headers = new Headers();
+  for (const [k, v] of Object.entries(req.headers)) {
+    if (k === "x-companyai-client-ip") continue; // only the adapter may say who is calling
+    if (Array.isArray(v)) for (const x of v) headers.append(k, x);
+    else if (v !== undefined) headers.set(k, v);
   }
+  headers.set("x-companyai-client-ip", req.socket.remoteAddress ?? "?");
+  const proto = req.headers["x-forwarded-proto"] === "https" ? "https" : "http";
+  const method = req.method ?? "GET";
+  const hasBody = method !== "GET" && method !== "HEAD";
+  return new Request(`${proto}://${req.headers.host ?? "localhost"}${req.url ?? "/"}`, {
+    method,
+    headers,
+    signal,
+    ...(hasBody ? { body: Readable.toWeb(req) as ReadableStream, duplex: "half" } : {}),
+  } as RequestInit);
 }
 
-/**
- * Who is here: one entry per open event stream. With login on, everyone online is shown to
- * everyone (and walks around the 3D office as a visitor).
- */
-const presence = (() => {
-  /** Each open stream, with how to shut it down (end the response and stop its subscription). */
-  const conns = new Map<ServerResponse, { user?: User; close: () => void }>();
-  const online = () => {
-    const seen = new Map<string, User>();
-    for (const { user } of conns.values()) if (user) seen.set(user.id, user);
-    return [...seen.values()].map(({ id, displayName, role }) => ({ id, displayName, role }));
-  };
-  const broadcast = () => {
-    const frame = `data: ${JSON.stringify({ type: "presence", online: online() })}\n\n`;
-    for (const res of conns.keys()) res.write(frame);
-  };
-  return {
-    add(res: ServerResponse, user: User | undefined, close: () => void) {
-      conns.set(res, { user, close });
-      broadcast();
-    },
-    remove(res: ServerResponse) {
-      if (conns.delete(res)) broadcast();
-    },
-    /** A changed name or role shows up at once. */
-    refresh(user: User) {
-      for (const conn of conns.values()) if (conn.user?.id === user.id) conn.user = user;
-      broadcast();
-    },
-    /** A removed account (or changed password) loses its live streams. */
-    close(userId: string) {
-      for (const conn of [...conns.values()]) if (conn.user?.id === userId) conn.close();
-    },
-    closeAll() {
-      for (const conn of [...conns.values()]) conn.close();
-    },
-    /** Something every open app should hear about that isn't company state. */
-    announce(data: unknown) {
-      const frame = `data: ${JSON.stringify(data)}\n\n`;
-      for (const res of conns.keys()) res.write(frame);
-    },
-  };
-})();
-const streams = presence;
-
-function handleEvents(req: IncomingMessage, res: ServerResponse, user?: User) {
-  res.writeHead(200, {
-    "content-type": "text/event-stream",
-    "cache-control": "no-cache",
-    connection: "keep-alive",
+async function send(res: ServerResponse, response: Response) {
+  const headers: Record<string, string | string[]> = {};
+  response.headers.forEach((value, key) => {
+    if (key !== "set-cookie") headers[key] = value;
   });
-  const send = (data: unknown) => res.write(`data: ${JSON.stringify(data)}\n\n`);
-  send({ type: "state", state: company.snapshot() });
-  const unsubscribe = company.subscribe(send);
-  const ping = setInterval(() => res.write(": ping\n\n"), 20_000);
-  let closed = false;
-  const close = () => {
-    if (closed) return;
-    closed = true;
-    clearInterval(ping);
-    unsubscribe();
-    presence.remove(res);
-    res.end();
-  };
-  presence.add(res, user, close);
-  req.on("close", close);
+  const cookies = response.headers.getSetCookie();
+  if (cookies.length) headers["set-cookie"] = cookies;
+  res.writeHead(response.status, headers);
+  if (!response.body) return res.end();
+  res.flushHeaders();
+  const reader = response.body.getReader();
+  // A browser that goes away cancels the stream, which lets the app clean up its subscription.
+  res.on("close", () => void reader.cancel().catch(() => {}));
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!res.write(value)) await new Promise((r) => res.once("drain", r));
+    }
+  } catch {
+    // cancelled
+  }
+  res.end();
 }
+
+// ------------------------------------------------------------------ static
 
 const MIME: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
@@ -439,6 +97,7 @@ const MIME: Record<string, string> = {
   ".ico": "image/x-icon",
   ".json": "application/json",
   ".glb": "model/gltf-binary",
+  ".woff2": "font/woff2",
   ".txt": "text/plain; charset=utf-8",
 };
 
@@ -448,7 +107,7 @@ function serveStatic(pathname: string, res: ServerResponse) {
     res.end("UI가 빌드되지 않았습니다. 개발 중에는 `npm run dev`로 http://localhost:5173 을 여세요.");
     return;
   }
-  let file = normalize(join(STATIC_DIR, pathname));
+  let file = normalize(join(STATIC_DIR, decodeURIComponent(pathname)));
   if (!file.startsWith(STATIC_DIR) || !existsSync(file) || statSync(file).isDirectory()) {
     file = join(STATIC_DIR, "index.html"); // SPA fallback
   }
@@ -456,54 +115,18 @@ function serveStatic(pathname: string, res: ServerResponse) {
   createReadStream(file).pipe(res);
 }
 
-/** Browsers send Origin on cross-site requests; a change from another site is refused. */
-function crossSite(req: IncomingMessage): boolean {
-  const origin = req.headers.origin;
-  if (!origin) return false;
-  try {
-    return new URL(origin).host !== req.headers.host;
-  } catch {
-    return true;
-  }
-}
-
 const server = createServer(async (req, res) => {
-  const url = new URL(req.url ?? "/", "http://localhost");
-  const method = req.method ?? "GET";
-  if (!url.pathname.startsWith("/api/")) return serveStatic(url.pathname, res);
-
-  const user = auth.enabled ? auth.verify(readCookie(req.headers.cookie, SESSION_COOKIE)) : undefined;
-  const needLogin = () => sendJSON(res, 401, { error: "로그인이 필요합니다.", login: true });
-
-  if (url.pathname === "/api/events" && method === "GET") {
-    if (auth.enabled && !user) return needLogin();
-    return handleEvents(req, res, user);
+  const path = (req.url ?? "/").split("?")[0];
+  if (!path.startsWith("/api/")) return serveStatic(path, res);
+  const abort = new AbortController();
+  res.on("close", () => abort.abort());
+  try {
+    await send(res, await app.fetch(toRequest(req, abort.signal)));
+  } catch (err) {
+    console.error(err);
+    if (!res.headersSent) res.writeHead(500, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: "서버 오류가 발생했습니다." }));
   }
-  if (method !== "GET" && crossSite(req)) return sendJSON(res, 403, { error: "다른 사이트에서 온 요청은 받지 않습니다." });
-
-  for (const r of routes) {
-    const match = r.method === method && url.pathname.match(r.pattern);
-    if (!match) continue;
-    try {
-      if (auth.enabled && r.access !== "public") {
-        if (!user) return needLogin();
-        if (!atLeast(user.role, r.access)) {
-          const why = user.role === "viewer" ? "보기 전용 계정은 바꿀 수 없습니다." : "소유자만 할 수 있습니다.";
-          return sendJSON(res, 403, { error: why });
-        }
-      }
-      const params = Object.fromEntries(r.keys.map((k, i) => [k, decodeURIComponent(match[i + 1])]));
-      const body = method === "GET" ? {} : await readBody(req);
-      const result = await company.as(actorOf(user), () => r.handler({ params, body, user, req, res }));
-      sendJSON(res, 200, result);
-    } catch (err) {
-      if (err instanceof EngineError || err instanceof AuthError) return sendJSON(res, err.status, { error: err.message });
-      console.error(err);
-      sendJSON(res, 500, { error: "서버 오류가 발생했습니다." });
-    }
-    return;
-  }
-  sendJSON(res, 404, { error: "Not found" });
 });
 
 const stopHermesSync = company.startHermesSync(Number(process.env.COMPANYAI_HERMES_SYNC_MS ?? 15_000));

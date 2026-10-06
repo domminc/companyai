@@ -7,9 +7,8 @@
  * account's session version, so a password change or removal signs every device out.
  */
 import { createHmac, randomBytes, randomUUID, scrypt, timingSafeEqual } from "node:crypto";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
 import { promisify } from "node:util";
+import { FilePersistence, type Persistence } from "./persistence";
 
 const scryptAsync = promisify(scrypt) as (password: string, salt: Buffer, keylen: number) => Promise<Buffer>;
 
@@ -33,7 +32,7 @@ interface StoredUser {
 
 export type User = Omit<StoredUser, "passwordHash" | "sessionVersion">;
 
-interface AuthFile {
+export interface AuthFile {
   secret: string;
   users: StoredUser[];
 }
@@ -92,19 +91,20 @@ function validRole(role: unknown): Role {
 
 export class AuthStore {
   private constructor(
-    private file: string,
+    private persistence: Persistence<AuthFile>,
     private data: AuthFile,
+    /** A secret from the environment signs sessions instead of the stored one. */
+    private signingSecret?: string,
   ) {}
 
-  static async open(file: string): Promise<AuthStore> {
-    try {
-      const data = JSON.parse(await readFile(file, "utf8")) as AuthFile;
-      if (!data.secret || !Array.isArray(data.users)) throw new Error("malformed");
-      return new AuthStore(file, data);
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw new Error(`${file}을(를) 읽을 수 없습니다: ${(err as Error).message}`);
-      return new AuthStore(file, { secret: randomBytes(32).toString("hex"), users: [] });
-    }
+  static async open(persistence: Persistence<AuthFile>, opts: { signingSecret?: string } = {}): Promise<AuthStore> {
+    const data = await persistence.load();
+    if (data && (!data.secret || !Array.isArray(data.users))) throw new Error("계정 데이터가 올바르지 않습니다.");
+    return new AuthStore(persistence, data ?? { secret: randomBytes(32).toString("hex"), users: [] }, opts.signingSecret);
+  }
+
+  static openFile(file: string, opts: { signingSecret?: string } = {}): Promise<AuthStore> {
+    return AuthStore.open(new FilePersistence<AuthFile>(file), opts);
   }
 
   /** Login is required once any account exists. */
@@ -121,11 +121,8 @@ export class AuthStore {
     return user && publicUser(user);
   }
 
-  private async save() {
-    await mkdir(dirname(this.file), { recursive: true });
-    const tmp = `${this.file}.${process.pid}.tmp`;
-    await writeFile(tmp, JSON.stringify(this.data, null, 2), { mode: 0o600 });
-    await rename(tmp, this.file);
+  private save() {
+    return this.persistence.save(this.data);
   }
 
   /** The first account: the owner. Only while there are none. */
@@ -207,7 +204,7 @@ export class AuthStore {
   }
 
   private sign(payload: string): string {
-    return createHmac("sha256", this.data.secret).update(payload).digest("base64url");
+    return createHmac("sha256", this.signingSecret ?? this.data.secret).update(payload).digest("base64url");
   }
 
   /** A signed session token: `<userId>.<sessionVersion>.<expires>.<mac>`. */
